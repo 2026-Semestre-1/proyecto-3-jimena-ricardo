@@ -2,9 +2,7 @@
 # Proyecto 3: Sistema de Archivos
 
 ## Integrantes:
-
 - 2023113347 - Jimena Méndez Morales
 - 2023215990 - Ricardo Arce Aguilar
-
-### Estado del proyecto: 1
-### Enlace del video: (Si esto fue solicitado)
+## Estado del proyecto: 1
+## Enlace del video: (Si esto fue solicitado)
