@@ -221,8 +221,9 @@ created timestamp
 modified timestamp
 accessed timestamp
 link count
-open count or open status
 ```
+
+Note: The open count and/or open status should be stored in a separate in-memory table, not in the inode.
 
 ### Rationale
 
@@ -465,6 +466,7 @@ User fields:
 
 ```text
 username
+full name
 password hash
 salt
 primary group
