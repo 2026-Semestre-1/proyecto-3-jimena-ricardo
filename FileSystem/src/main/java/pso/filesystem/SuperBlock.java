@@ -11,7 +11,7 @@ public final class SuperBlock {
     public static final int BINARY_SIZE = DEFAULT_BLOCK_SIZE;
     public static final byte[] MAGIC = new byte[] {'J', 'R', 'F', 'S'};
 
-    private static final ByteOrder BYTE_ORDER = ByteOrder.LITTLE_ENDIAN;
+    private static final ByteOrder BYTE_ORDER = ByteOrder.BIG_ENDIAN;
 
     private final int totalBlocks;
     private final int blockSize;

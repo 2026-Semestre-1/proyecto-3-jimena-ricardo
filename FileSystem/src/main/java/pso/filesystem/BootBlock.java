@@ -14,7 +14,7 @@ public final class BootBlock {
     public static final int BINARY_SIZE = DEFAULT_BLOCK_SIZE;
     public static final byte[] MAGIC = new byte[] {'B', 'O', 'O', 'T'};
 
-    private static final ByteOrder BYTE_ORDER = ByteOrder.LITTLE_ENDIAN;
+    private static final ByteOrder BYTE_ORDER = ByteOrder.BIG_ENDIAN;
 
     private final int version;
     private final long diskSizeBytes;
