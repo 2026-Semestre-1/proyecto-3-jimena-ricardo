@@ -6,9 +6,8 @@ import java.util.Arrays;
 
 public final class SuperBlock {
 
-    public static final int DEFAULT_BLOCK_SIZE = 1024;
     public static final int MAGIC_SIZE = 4;
-    public static final int BINARY_SIZE = DEFAULT_BLOCK_SIZE;
+    public static final int BINARY_SIZE = 1024;
     public static final byte[] MAGIC = new byte[] {'J', 'R', 'F', 'S'};
 
     private static final ByteOrder BYTE_ORDER = ByteOrder.BIG_ENDIAN;
@@ -42,36 +41,22 @@ public final class SuperBlock {
             int groupTableBlock,
             int dataRegionStartBlock
     ) {
-        if (totalBlocks <= 0) {
-            throw new IllegalArgumentException("totalBlocks must be positive");
-        }
-        if (blockSize <= 0) {
-            throw new IllegalArgumentException("blockSize must be positive");
-        }
-        if (usedBlocks < 0) {
-            throw new IllegalArgumentException("usedBlocks cannot be negative");
-        }
-        if (freeBlocks < 0) {
-            throw new IllegalArgumentException("freeBlocks cannot be negative");
-        }
+        BinaryFormatValidator.requirePositive("totalBlocks", totalBlocks);
+        BinaryFormatValidator.requirePositive("blockSize", blockSize);
+        BinaryFormatValidator.requireNonNegative("usedBlocks", usedBlocks);
+        BinaryFormatValidator.requireNonNegative("freeBlocks", freeBlocks);
         if (usedBlocks + freeBlocks != totalBlocks) {
             throw new IllegalArgumentException("usedBlocks + freeBlocks must equal totalBlocks");
         }
-        if (rootInodeId <= 0) {
-            throw new IllegalArgumentException("rootInodeId must be positive");
-        }
+        BinaryFormatValidator.requirePositive("rootInodeId", rootInodeId);
         if (nextInodeId <= rootInodeId) {
             throw new IllegalArgumentException("nextInodeId must be greater than rootInodeId");
         }
-        validateBlockIndex("bitmapStartBlock", bitmapStartBlock, totalBlocks);
-        validatePositiveCount("bitmapBlockCount", bitmapBlockCount);
-        validateBlockRange("bitmap", bitmapStartBlock, bitmapBlockCount, totalBlocks);
-        validateBlockIndex("inodeTableStartBlock", inodeTableStartBlock, totalBlocks);
-        validatePositiveCount("inodeTableBlockCount", inodeTableBlockCount);
-        validateBlockRange("inode table", inodeTableStartBlock, inodeTableBlockCount, totalBlocks);
-        validateBlockIndex("userTableBlock", userTableBlock, totalBlocks);
-        validateBlockIndex("groupTableBlock", groupTableBlock, totalBlocks);
-        validateBlockIndex("dataRegionStartBlock", dataRegionStartBlock, totalBlocks);
+        BinaryFormatValidator.requireBlockRange("bitmap", bitmapStartBlock, bitmapBlockCount, totalBlocks);
+        BinaryFormatValidator.requireBlockRange("inode table", inodeTableStartBlock, inodeTableBlockCount, totalBlocks);
+        BinaryFormatValidator.requireBlockIndex("userTableBlock", userTableBlock, totalBlocks);
+        BinaryFormatValidator.requireBlockIndex("groupTableBlock", groupTableBlock, totalBlocks);
+        BinaryFormatValidator.requireBlockIndex("dataRegionStartBlock", dataRegionStartBlock, totalBlocks);
 
         this.totalBlocks = totalBlocks;
         this.blockSize = blockSize;
@@ -111,9 +96,7 @@ public final class SuperBlock {
     }
 
     public static SuperBlock fromBytes(byte[] bytes) {
-        if (bytes == null || bytes.length < BINARY_SIZE) {
-            throw new IllegalArgumentException("SuperBlock requires at least " + BINARY_SIZE + " bytes");
-        }
+        BinaryFormatValidator.requireBytesAtLeast("SuperBlock", bytes, BINARY_SIZE);
 
         ByteBuffer buffer = ByteBuffer.wrap(bytes);
         buffer.order(BYTE_ORDER);
@@ -153,25 +136,6 @@ public final class SuperBlock {
                 groupTableBlock,
                 dataRegionStartBlock
         );
-    }
-
-    private static void validateBlockIndex(String fieldName, int value, int totalBlocks) {
-        if (value < 0 || value >= totalBlocks) {
-            throw new IllegalArgumentException(fieldName + " must be between 0 and " + (totalBlocks - 1));
-        }
-    }
-
-    private static void validatePositiveCount(String fieldName, int value) {
-        if (value <= 0) {
-            throw new IllegalArgumentException(fieldName + " must be positive");
-        }
-    }
-
-    private static void validateBlockRange(String fieldName, int startBlock, int blockCount, int totalBlocks) {
-        long endExclusive = (long) startBlock + blockCount;
-        if (endExclusive > totalBlocks) {
-            throw new IllegalArgumentException(fieldName + " block range exceeds total block count");
-        }
     }
 
     public int totalBlocks() {

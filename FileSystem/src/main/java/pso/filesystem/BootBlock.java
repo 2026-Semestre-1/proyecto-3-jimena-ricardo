@@ -4,14 +4,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Objects;
 
 public final class BootBlock {
 
-    public static final int DEFAULT_BLOCK_SIZE = 1024;
     public static final int MAGIC_SIZE = 4;
     public static final int VOLUME_NAME_SIZE = 32;
-    public static final int BINARY_SIZE = DEFAULT_BLOCK_SIZE;
+    public static final int BINARY_SIZE = 1024;
     public static final byte[] MAGIC = new byte[] {'B', 'O', 'O', 'T'};
 
     private static final ByteOrder BYTE_ORDER = ByteOrder.BIG_ENDIAN;
@@ -33,22 +31,12 @@ public final class BootBlock {
             long creationTimeMillis,
             String volumeName
     ) {
-        if (version <= 0) {
-            throw new IllegalArgumentException("version must be positive");
-        }
-        if (diskSizeBytes <= 0) {
-            throw new IllegalArgumentException("diskSizeBytes must be positive");
-        }
-        if (blockSize <= 0) {
-            throw new IllegalArgumentException("blockSize must be positive");
-        }
-        if (totalBlocks <= 0) {
-            throw new IllegalArgumentException("totalBlocks must be positive");
-        }
-        if (superBlockIndex < 0) {
-            throw new IllegalArgumentException("superBlockIndex cannot be negative");
-        }
-        Objects.requireNonNull(volumeName, "volumeName cannot be null");
+        BinaryFormatValidator.requirePositive("version", version);
+        BinaryFormatValidator.requirePositive("diskSizeBytes", diskSizeBytes);
+        BinaryFormatValidator.requirePositive("blockSize", blockSize);
+        BinaryFormatValidator.requirePositive("totalBlocks", totalBlocks);
+        BinaryFormatValidator.requireBlockIndex("superBlockIndex", superBlockIndex, totalBlocks);
+        BinaryFormatValidator.requireFixedUtf8Length("volumeName", volumeName, VOLUME_NAME_SIZE);
 
         this.version = version;
         this.diskSizeBytes = diskSizeBytes;
@@ -76,9 +64,7 @@ public final class BootBlock {
     }
 
     public static BootBlock fromBytes(byte[] bytes) {
-        if (bytes == null || bytes.length < BINARY_SIZE) {
-            throw new IllegalArgumentException("BootBlock requires at least " + BINARY_SIZE + " bytes");
-        }
+        BinaryFormatValidator.requireBytesAtLeast("BootBlock", bytes, BINARY_SIZE);
 
         ByteBuffer buffer = ByteBuffer.wrap(bytes);
         buffer.order(BYTE_ORDER);
@@ -109,10 +95,8 @@ public final class BootBlock {
     }
 
     private static void putFixedString(ByteBuffer buffer, String value, int fieldSize) {
+        BinaryFormatValidator.requireFixedUtf8Length("value", value, fieldSize);
         byte[] raw = value.getBytes(StandardCharsets.UTF_8);
-        if (raw.length > fieldSize) {
-            throw new IllegalArgumentException("String is too long for fixed field of " + fieldSize + " bytes: " + value);
-        }
 
         buffer.put(raw);
         for (int i = raw.length; i < fieldSize; i++) {

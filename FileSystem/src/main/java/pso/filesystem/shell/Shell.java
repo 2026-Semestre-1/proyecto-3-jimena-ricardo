@@ -151,7 +151,7 @@ public class Shell {
         }
 
         long diskSizeBytes = (long) sizeMb * 1024 * 1024;
-        int blockSize = BootBlock.DEFAULT_BLOCK_SIZE;
+        int blockSize = 1024;
         int totalBlocks = Math.toIntExact(diskSizeBytes / blockSize);
 
         if (totalBlocks <= DATA_REGION_START_BLOCK) {
