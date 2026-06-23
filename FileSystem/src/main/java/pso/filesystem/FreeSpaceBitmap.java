@@ -94,6 +94,6 @@ public final class FreeSpaceBitmap {
     }
 
     private static int requiredBytes(int totalBlocks) {
-        return (totalBlocks + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+        return BinaryFormatValidator.ceilDiv(totalBlocks, BITS_PER_BYTE);
     }
 }

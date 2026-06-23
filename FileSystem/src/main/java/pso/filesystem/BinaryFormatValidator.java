@@ -72,4 +72,10 @@ public final class BinaryFormatValidator {
             throw new IllegalArgumentException(fieldName + " exceeds fixed field size of " + maxBytes + " bytes");
         }
     }
+
+    public static int ceilDiv(int dividend, int divisor) {
+        requireNonNegative("dividend", dividend);
+        requirePositive("divisor", divisor);
+        return (dividend + divisor - 1) / divisor;
+    }
 }

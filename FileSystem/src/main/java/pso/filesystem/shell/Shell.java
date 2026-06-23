@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Scanner;
 import pso.filesystem.BootBlock;
+import pso.filesystem.BinaryFormatValidator;
 import pso.filesystem.FreeSpaceBitmap;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.VirtualDisk;
@@ -20,13 +21,13 @@ public class Shell {
 
     public void start() {
         Scanner sc = new Scanner(System.in);
-        String command;
-        do {
+        boolean running = true;
+        while (running) {
             System.out.print("ricardo@fs> ");
-            command = sc.nextLine();
+            String command = sc.nextLine();
             ParsedCommand parsedCommand = parse(command);
-            dispatch(parsedCommand);
-        } while (!command.equals("exit"));
+            running = dispatch(parsedCommand);
+        }
     }
 
     private ParsedCommand parse(String input) {
@@ -49,16 +50,16 @@ public class Shell {
         return new ParsedCommand(name, options, operands);
     }
 
-    private void dispatch(ParsedCommand parsedCommand) {
+    private boolean dispatch(ParsedCommand parsedCommand) {
         switch (parsedCommand.name()) {
             case "":
-                break;
+                return true;
             case "format":
                 format(parsedCommand);
-                break;
+                return true;
             case "exit":
                 System.out.println("bye");
-                break;
+                return false;
             case "useradd":
                 break;
             case "groupadd":
@@ -110,7 +111,10 @@ public class Shell {
                 break;
             default:
                 System.out.println("Unknown command: " + parsedCommand.name());
+                return true;
         }
+
+        return true;
     }
 
     private void format(ParsedCommand parsedCommand) {
@@ -149,8 +153,8 @@ public class Shell {
         long diskSizeBytes = (long) sizeMb * 1024 * 1024;
         int blockSize = 1024;
         int totalBlocks = Math.toIntExact(diskSizeBytes / blockSize);
-        int bitmapBytesNeeded = (totalBlocks + 7) / 8;
-        int bitmapBlockCount = (bitmapBytesNeeded + blockSize - 1) / blockSize;
+        int bitmapBytesNeeded = BinaryFormatValidator.ceilDiv(totalBlocks, 8);
+        int bitmapBlockCount = BinaryFormatValidator.ceilDiv(bitmapBytesNeeded, blockSize);
         int inodeTableStartBlock = BITMAP_START_BLOCK + bitmapBlockCount;
         int userTableBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
         int groupTableBlock = userTableBlock + 1;
