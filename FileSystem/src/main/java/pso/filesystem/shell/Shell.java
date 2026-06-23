@@ -14,12 +14,7 @@ public class Shell {
 
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
-    private static final int BITMAP_BLOCK_COUNT = 1;
-    private static final int INODE_TABLE_START_BLOCK = 3;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
-    private static final int USER_TABLE_BLOCK = 11;
-    private static final int GROUP_TABLE_BLOCK = 12;
-    private static final int DATA_REGION_START_BLOCK = 13;
     private static final int ROOT_INODE_ID = 1;
     private static final int NEXT_INODE_ID = 2;
 
@@ -154,8 +149,14 @@ public class Shell {
         long diskSizeBytes = (long) sizeMb * 1024 * 1024;
         int blockSize = 1024;
         int totalBlocks = Math.toIntExact(diskSizeBytes / blockSize);
+        int bitmapBytesNeeded = (totalBlocks + 7) / 8;
+        int bitmapBlockCount = (bitmapBytesNeeded + blockSize - 1) / blockSize;
+        int inodeTableStartBlock = BITMAP_START_BLOCK + bitmapBlockCount;
+        int userTableBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
+        int groupTableBlock = userTableBlock + 1;
+        int dataRegionStartBlock = groupTableBlock + 1;
 
-        if (totalBlocks <= DATA_REGION_START_BLOCK) {
+        if (totalBlocks <= dataRegionStartBlock) {
             System.out.println("disk is too small for the initial filesystem layout");
             return;
         }
@@ -163,7 +164,9 @@ public class Shell {
         FreeSpaceBitmap bitmap = new FreeSpaceBitmap(totalBlocks);
         bitmap.markUsed(0);
         bitmap.markUsed(SUPER_BLOCK_INDEX);
-        bitmap.markUsed(BITMAP_START_BLOCK);
+        for (int block = BITMAP_START_BLOCK; block < BITMAP_START_BLOCK + bitmapBlockCount; block++) {
+            bitmap.markUsed(block);
+        }
 
         int usedBlocks = bitmap.usedCount();
         BootBlock bootBlock = new BootBlock(
@@ -183,18 +186,28 @@ public class Shell {
                 ROOT_INODE_ID,
                 NEXT_INODE_ID,
                 BITMAP_START_BLOCK,
-                BITMAP_BLOCK_COUNT,
-                INODE_TABLE_START_BLOCK,
+                bitmapBlockCount,
+                inodeTableStartBlock,
                 INODE_TABLE_BLOCK_COUNT,
-                USER_TABLE_BLOCK,
-                GROUP_TABLE_BLOCK,
-                DATA_REGION_START_BLOCK
+                userTableBlock,
+                groupTableBlock,
+                dataRegionStartBlock
         );
 
         try (VirtualDisk disk = VirtualDisk.createOrOverwrite(diskName, diskSizeBytes, blockSize)) {
             disk.writeBlock(0, bootBlock.toBytes());
             disk.writeBlock(SUPER_BLOCK_INDEX, superBlock.toBytes());
-            disk.writeBlock(BITMAP_START_BLOCK, bitmap.toBytes(blockSize * BITMAP_BLOCK_COUNT));
+
+            byte[] bitmapBytes = bitmap.toBytes(blockSize * bitmapBlockCount);
+            for (int block = 0; block < bitmapBlockCount; block++) {
+                byte[] blockBytes = Arrays.copyOfRange(
+                        bitmapBytes,
+                        block * blockSize,
+                        (block + 1) * blockSize
+                );
+                disk.writeBlock(BITMAP_START_BLOCK + block, blockBytes);
+            }
+
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("format failed: " + ex.getMessage());

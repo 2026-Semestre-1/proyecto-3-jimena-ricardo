@@ -2,18 +2,6 @@ package pso.filesystem;
 
 import java.util.BitSet;
 
-/**
- * Free-space bitmap for the virtual disk.
- *
- * <p>One bit represents one block:</p>
- * <ul>
- *     <li>0 = free</li>
- *     <li>1 = used</li>
- * </ul>
- *
- * <p>The binary representation uses a big-endian-style bit layout inside each
- * byte: block 0 is stored in byte 0 bit 7, block 1 in byte 0 bit 6, and so on.</p>
- */
 public final class FreeSpaceBitmap {
 
     private static final int BITS_PER_BYTE = 8;
