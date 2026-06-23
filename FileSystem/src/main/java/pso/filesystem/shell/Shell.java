@@ -8,6 +8,8 @@ import java.util.Scanner;
 import pso.filesystem.BootBlock;
 import pso.filesystem.BinaryFormatValidator;
 import pso.filesystem.FreeSpaceBitmap;
+import pso.filesystem.Inode;
+import pso.filesystem.InodeType;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.VirtualDisk;
 
@@ -17,7 +19,12 @@ public class Shell {
     private static final int BITMAP_START_BLOCK = 2;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
     private static final int ROOT_INODE_ID = 1;
-    private static final int NEXT_INODE_ID = 2;
+    private static final int ROOT_HOME_INODE_ID = 2;
+    private static final int HOME_INODE_ID = 3;
+    private static final int NEXT_INODE_ID = 4;
+    private static final int ROOT_USER_ID = 0;
+    private static final int ROOT_GROUP_ID = 0;
+    private static final int DEFAULT_DIRECTORY_PERMISSIONS = 0x75;
 
     public void start() {
         Scanner sc = new Scanner(System.in);
@@ -171,15 +178,17 @@ public class Shell {
         for (int block = BITMAP_START_BLOCK; block < BITMAP_START_BLOCK + bitmapBlockCount; block++) {
             bitmap.markUsed(block);
         }
+        bitmap.markUsed(inodeTableStartBlock);
 
         int usedBlocks = bitmap.usedCount();
+        long now = System.currentTimeMillis();
         BootBlock bootBlock = new BootBlock(
                 1,
                 diskSizeBytes,
                 blockSize,
                 totalBlocks,
                 SUPER_BLOCK_INDEX,
-                System.currentTimeMillis(),
+                now,
                 diskName
         );
         SuperBlock superBlock = new SuperBlock(
@@ -212,10 +221,57 @@ public class Shell {
                 disk.writeBlock(BITMAP_START_BLOCK + block, blockBytes);
             }
 
+            byte[] inodeTableBlock = new byte[blockSize];
+            writeInodeToTableBlock(inodeTableBlock, 0, new Inode(
+                    ROOT_INODE_ID,
+                    InodeType.DIRECTORY,
+                    DEFAULT_DIRECTORY_PERMISSIONS,
+                    ROOT_USER_ID,
+                    ROOT_GROUP_ID,
+                    0,
+                    Inode.NO_INDEX_BLOCK,
+                    1,
+                    now,
+                    now,
+                    now
+            ));
+            writeInodeToTableBlock(inodeTableBlock, 1, new Inode(
+                    ROOT_HOME_INODE_ID,
+                    InodeType.DIRECTORY,
+                    DEFAULT_DIRECTORY_PERMISSIONS,
+                    ROOT_USER_ID,
+                    ROOT_GROUP_ID,
+                    0,
+                    Inode.NO_INDEX_BLOCK,
+                    1,
+                    now,
+                    now,
+                    now
+            ));
+            writeInodeToTableBlock(inodeTableBlock, 2, new Inode(
+                    HOME_INODE_ID,
+                    InodeType.DIRECTORY,
+                    DEFAULT_DIRECTORY_PERMISSIONS,
+                    ROOT_USER_ID,
+                    ROOT_GROUP_ID,
+                    0,
+                    Inode.NO_INDEX_BLOCK,
+                    1,
+                    now,
+                    now,
+                    now
+            ));
+            disk.writeBlock(inodeTableStartBlock, inodeTableBlock);
+
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("format failed: " + ex.getMessage());
         }
+    }
+
+    private void writeInodeToTableBlock(byte[] inodeTableBlock, int inodeSlot, Inode inode) {
+        byte[] inodeBytes = inode.toBytes();
+        System.arraycopy(inodeBytes, 0, inodeTableBlock, inodeSlot * Inode.BINARY_SIZE, Inode.BINARY_SIZE);
     }
 
     private void hexdump(ParsedCommand parsedCommand) {
