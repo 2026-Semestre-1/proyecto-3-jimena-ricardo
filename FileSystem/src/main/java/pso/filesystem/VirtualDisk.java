@@ -5,13 +5,6 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
 
-/**
- * Low-level wrapper around the virtual disk file.
- *
- * <p>This class owns physical disk I/O. File-system structures such as
- * BootBlock and SuperBlock only build their binary representation; this class
- * writes those bytes to the correct block.</p>
- */
 public final class VirtualDisk implements AutoCloseable {
 
     private final RandomAccessFile file;

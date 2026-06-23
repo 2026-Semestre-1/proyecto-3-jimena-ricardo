@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Scanner;
 import pso.filesystem.BootBlock;
+import pso.filesystem.FreeSpaceBitmap;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.VirtualDisk;
 
@@ -159,7 +160,12 @@ public class Shell {
             return;
         }
 
-        int usedBlocks = 2;
+        FreeSpaceBitmap bitmap = new FreeSpaceBitmap(totalBlocks);
+        bitmap.markUsed(0);
+        bitmap.markUsed(SUPER_BLOCK_INDEX);
+        bitmap.markUsed(BITMAP_START_BLOCK);
+
+        int usedBlocks = bitmap.usedCount();
         BootBlock bootBlock = new BootBlock(
                 1,
                 diskSizeBytes,
@@ -188,6 +194,7 @@ public class Shell {
         try (VirtualDisk disk = VirtualDisk.createOrOverwrite(diskName, diskSizeBytes, blockSize)) {
             disk.writeBlock(0, bootBlock.toBytes());
             disk.writeBlock(SUPER_BLOCK_INDEX, superBlock.toBytes());
+            disk.writeBlock(BITMAP_START_BLOCK, bitmap.toBytes(blockSize * BITMAP_BLOCK_COUNT));
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("format failed: " + ex.getMessage());
