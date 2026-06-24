@@ -11,10 +11,12 @@ import pso.filesystem.BinaryFormatValidator;
 import pso.filesystem.DirectoryEntry;
 import pso.filesystem.FileSystem;
 import pso.filesystem.FreeSpaceBitmap;
+import pso.filesystem.GroupRecord;
 import pso.filesystem.IndexBlock;
 import pso.filesystem.Inode;
 import pso.filesystem.InodeType;
 import pso.filesystem.SuperBlock;
+import pso.filesystem.UserRecord;
 import pso.filesystem.VirtualDisk;
 
 public class Shell {
@@ -25,6 +27,8 @@ public class Shell {
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
+    private static final int USER_TABLE_BLOCK_COUNT = 8;
+    private static final int GROUP_TABLE_BLOCK_COUNT = 16;
     private static final int ROOT_INODE_ID = 1;
     private static final int ROOT_HOME_INODE_ID = 2;
     private static final int HOME_INODE_ID = 3;
@@ -193,9 +197,9 @@ public class Shell {
         int bitmapBytesNeeded = BinaryFormatValidator.ceilDiv(totalBlocks, 8);
         int bitmapBlockCount = BinaryFormatValidator.ceilDiv(bitmapBytesNeeded, blockSize);
         int inodeTableStartBlock = BITMAP_START_BLOCK + bitmapBlockCount;
-        int userTableBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
-        int groupTableBlock = userTableBlock + 1;
-        int dataRegionStartBlock = groupTableBlock + 1;
+        int userTableStartBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
+        int groupTableStartBlock = userTableStartBlock + USER_TABLE_BLOCK_COUNT;
+        int dataRegionStartBlock = groupTableStartBlock + GROUP_TABLE_BLOCK_COUNT;
         int rootIndexBlock = dataRegionStartBlock;
         int rootDirectoryDataBlock = rootIndexBlock + 1;
         int rootHomeIndexBlock = rootDirectoryDataBlock + 1;
@@ -235,8 +239,10 @@ public class Shell {
                 bitmapBlockCount,
                 inodeTableStartBlock,
                 INODE_TABLE_BLOCK_COUNT,
-                userTableBlock,
-                groupTableBlock,
+                userTableStartBlock,
+                USER_TABLE_BLOCK_COUNT,
+                groupTableStartBlock,
+                GROUP_TABLE_BLOCK_COUNT,
                 dataRegionStartBlock
         );
 
@@ -298,8 +304,31 @@ public class Shell {
             for (int block = inodeTableStartBlock + 1; block < inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT; block++) {
                 disk.writeBlock(block, new byte[blockSize]);
             }
-            disk.writeBlock(userTableBlock, new byte[blockSize]);
-            disk.writeBlock(groupTableBlock, new byte[blockSize]);
+            byte[] firstUserTableBlock = new byte[blockSize];
+            writeUserRecordToTableBlock(firstUserTableBlock, 0, new UserRecord(
+                    true,
+                    ROOT_USER_ID,
+                    "root",
+                    ROOT_GROUP_ID,
+                    ROOT_HOME_INODE_ID,
+                    rootPassword
+            ));
+            disk.writeBlock(userTableStartBlock, firstUserTableBlock);
+            for (int block = userTableStartBlock + 1; block < userTableStartBlock + USER_TABLE_BLOCK_COUNT; block++) {
+                disk.writeBlock(block, new byte[blockSize]);
+            }
+
+            byte[] firstGroupTableBlock = new byte[blockSize];
+            writeGroupRecordToTableBlock(firstGroupTableBlock, 0, new GroupRecord(
+                    true,
+                    ROOT_GROUP_ID,
+                    "root",
+                    new int[] {ROOT_USER_ID}
+            ));
+            disk.writeBlock(groupTableStartBlock, firstGroupTableBlock);
+            for (int block = groupTableStartBlock + 1; block < groupTableStartBlock + GROUP_TABLE_BLOCK_COUNT; block++) {
+                disk.writeBlock(block, new byte[blockSize]);
+            }
 
             disk.writeBlock(rootIndexBlock, new IndexBlock(List.of(rootDirectoryDataBlock)).toBytes(blockSize));
             disk.writeBlock(rootDirectoryDataBlock, directoryDataBlock(
@@ -336,6 +365,16 @@ public class Shell {
     private void writeInodeToTableBlock(byte[] inodeTableBlock, int inodeSlot, Inode inode) {
         byte[] inodeBytes = inode.toBytes();
         System.arraycopy(inodeBytes, 0, inodeTableBlock, inodeSlot * Inode.BINARY_SIZE, Inode.BINARY_SIZE);
+    }
+
+    private void writeUserRecordToTableBlock(byte[] userTableBlock, int userSlot, UserRecord userRecord) {
+        byte[] userBytes = userRecord.toBytes();
+        System.arraycopy(userBytes, 0, userTableBlock, userSlot * UserRecord.BINARY_SIZE, UserRecord.BINARY_SIZE);
+    }
+
+    private void writeGroupRecordToTableBlock(byte[] groupTableBlock, int groupSlot, GroupRecord groupRecord) {
+        byte[] groupBytes = groupRecord.toBytes();
+        System.arraycopy(groupBytes, 0, groupTableBlock, groupSlot * GroupRecord.BINARY_SIZE, GroupRecord.BINARY_SIZE);
     }
 
     private byte[] directoryDataBlock(int blockSize, DirectoryEntry... entries) {

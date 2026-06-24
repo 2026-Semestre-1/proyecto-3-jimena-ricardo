@@ -22,8 +22,10 @@ public final class SuperBlock {
     private final int bitmapBlockCount;
     private final int inodeTableStartBlock;
     private final int inodeTableBlockCount;
-    private final int userTableBlock;
-    private final int groupTableBlock;
+    private final int userTableStartBlock;
+    private final int userTableBlockCount;
+    private final int groupTableStartBlock;
+    private final int groupTableBlockCount;
     private final int dataRegionStartBlock;
 
     public SuperBlock(
@@ -37,8 +39,10 @@ public final class SuperBlock {
             int bitmapBlockCount,
             int inodeTableStartBlock,
             int inodeTableBlockCount,
-            int userTableBlock,
-            int groupTableBlock,
+            int userTableStartBlock,
+            int userTableBlockCount,
+            int groupTableStartBlock,
+            int groupTableBlockCount,
             int dataRegionStartBlock
     ) {
         BinaryFormatValidator.requirePositive("totalBlocks", totalBlocks);
@@ -54,8 +58,8 @@ public final class SuperBlock {
         }
         BinaryFormatValidator.requireBlockRange("bitmap", bitmapStartBlock, bitmapBlockCount, totalBlocks);
         BinaryFormatValidator.requireBlockRange("inode table", inodeTableStartBlock, inodeTableBlockCount, totalBlocks);
-        BinaryFormatValidator.requireBlockIndex("userTableBlock", userTableBlock, totalBlocks);
-        BinaryFormatValidator.requireBlockIndex("groupTableBlock", groupTableBlock, totalBlocks);
+        BinaryFormatValidator.requireBlockRange("user table", userTableStartBlock, userTableBlockCount, totalBlocks);
+        BinaryFormatValidator.requireBlockRange("group table", groupTableStartBlock, groupTableBlockCount, totalBlocks);
         BinaryFormatValidator.requireBlockIndex("dataRegionStartBlock", dataRegionStartBlock, totalBlocks);
 
         this.totalBlocks = totalBlocks;
@@ -68,8 +72,10 @@ public final class SuperBlock {
         this.bitmapBlockCount = bitmapBlockCount;
         this.inodeTableStartBlock = inodeTableStartBlock;
         this.inodeTableBlockCount = inodeTableBlockCount;
-        this.userTableBlock = userTableBlock;
-        this.groupTableBlock = groupTableBlock;
+        this.userTableStartBlock = userTableStartBlock;
+        this.userTableBlockCount = userTableBlockCount;
+        this.groupTableStartBlock = groupTableStartBlock;
+        this.groupTableBlockCount = groupTableBlockCount;
         this.dataRegionStartBlock = dataRegionStartBlock;
     }
 
@@ -88,8 +94,10 @@ public final class SuperBlock {
         buffer.putInt(bitmapBlockCount);
         buffer.putInt(inodeTableStartBlock);
         buffer.putInt(inodeTableBlockCount);
-        buffer.putInt(userTableBlock);
-        buffer.putInt(groupTableBlock);
+        buffer.putInt(userTableStartBlock);
+        buffer.putInt(userTableBlockCount);
+        buffer.putInt(groupTableStartBlock);
+        buffer.putInt(groupTableBlockCount);
         buffer.putInt(dataRegionStartBlock);
 
         return buffer.array();
@@ -117,8 +125,10 @@ public final class SuperBlock {
         int bitmapBlockCount = buffer.getInt();
         int inodeTableStartBlock = buffer.getInt();
         int inodeTableBlockCount = buffer.getInt();
-        int userTableBlock = buffer.getInt();
-        int groupTableBlock = buffer.getInt();
+        int userTableStartBlock = buffer.getInt();
+        int userTableBlockCount = buffer.getInt();
+        int groupTableStartBlock = buffer.getInt();
+        int groupTableBlockCount = buffer.getInt();
         int dataRegionStartBlock = buffer.getInt();
 
         return new SuperBlock(
@@ -132,8 +142,10 @@ public final class SuperBlock {
                 bitmapBlockCount,
                 inodeTableStartBlock,
                 inodeTableBlockCount,
-                userTableBlock,
-                groupTableBlock,
+                userTableStartBlock,
+                userTableBlockCount,
+                groupTableStartBlock,
+                groupTableBlockCount,
                 dataRegionStartBlock
         );
     }
@@ -178,12 +190,20 @@ public final class SuperBlock {
         return inodeTableBlockCount;
     }
 
-    public int userTableBlock() {
-        return userTableBlock;
+    public int userTableStartBlock() {
+        return userTableStartBlock;
     }
 
-    public int groupTableBlock() {
-        return groupTableBlock;
+    public int userTableBlockCount() {
+        return userTableBlockCount;
+    }
+
+    public int groupTableStartBlock() {
+        return groupTableStartBlock;
+    }
+
+    public int groupTableBlockCount() {
+        return groupTableBlockCount;
     }
 
     public int dataRegionStartBlock() {
