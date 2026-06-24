@@ -18,6 +18,8 @@ import pso.filesystem.VirtualDisk;
 
 public class Shell {
 
+    private String currentDiskName;
+
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
@@ -115,6 +117,7 @@ public class Shell {
             case "viewFCB":
                 break;
             case "infoFS":
+                infoFS(parsedCommand);
                 break;
             case "hexdump":
                 hexdump(parsedCommand);
@@ -297,6 +300,7 @@ public class Shell {
                     new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
             ));
 
+            currentDiskName = diskName;
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("format failed: " + ex.getMessage());
@@ -325,23 +329,20 @@ public class Shell {
 
     private void hexdump(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
-        if (operands.length != 1 && operands.length != 3) {
-            System.out.println("usage: hexdump <diskName> [offset length]");
+        if (operands.length != 0 && operands.length != 2) {
+            System.out.println("usage: hexdump [offset length]");
             return;
         }
-
-        String diskName = operands[0];
-        if (!isSimpleFileName(diskName)) {
-            System.out.println("disk name must be a simple filename, not a path");
+        if (!hasCurrentDisk()) {
             return;
         }
 
         long startOffset = 0;
         long length = -1;
-        if (operands.length == 3) {
+        if (operands.length == 2) {
             try {
-                startOffset = Long.parseLong(operands[1]);
-                length = Long.parseLong(operands[2]);
+                startOffset = Long.parseLong(operands[0]);
+                length = Long.parseLong(operands[1]);
             } catch (NumberFormatException ex) {
                 System.out.println("offset and length must be non-negative integers");
                 return;
@@ -353,7 +354,7 @@ public class Shell {
             }
         }
 
-        try (FileInputStream input = new FileInputStream(diskName)) {
+        try (FileInputStream input = new FileInputStream(currentDiskName)) {
             long skipped = skipFully(input, startOffset);
             if (skipped < startOffset) {
                 System.out.println("offset is beyond end of file");
@@ -387,6 +388,37 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void infoFS(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 0) {
+            System.out.println("usage: infoFS");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        try (VirtualDisk disk = VirtualDisk.openReadOnly(currentDiskName, BootBlock.BINARY_SIZE)) {
+            BootBlock bootBlock = BootBlock.fromBytes(disk.readBlock(0));
+            SuperBlock superBlock = SuperBlock.fromBytes(disk.readBlock(bootBlock.superBlockIndex()));
+            System.out.println("File system name: " + bootBlock.volumeName() +
+                               "\nTotal space: " + bootBlock.diskSizeBytes() / 1024 / 1024 + " MB" +
+                               "\nUsed space: " + superBlock.usedBlocks() / 1024 + " MB" +
+                               "\nFree space: " + superBlock.freeBlocks() / 1024 + " MB");
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("infoFS failed: " + ex.getMessage());
+        }
+    }
+
+    private boolean hasCurrentDisk() {
+        if (currentDiskName == null) {
+            System.out.println("no disk is currently selected");
+            return false;
+        }
+
+        return true;
     }
 
     private long skipFully(InputStream input, long bytesToSkip) throws IOException {

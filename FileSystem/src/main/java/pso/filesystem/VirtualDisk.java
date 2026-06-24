@@ -28,6 +28,11 @@ public final class VirtualDisk implements AutoCloseable {
         return new VirtualDisk(randomAccessFile, blockSize);
     }
 
+    public static VirtualDisk openReadOnly(String fileName, int blockSize) throws IOException {
+        RandomAccessFile randomAccessFile = new RandomAccessFile(new File(fileName), "r");
+        return new VirtualDisk(randomAccessFile, blockSize);
+    }
+
     public void writeBlock(int blockNumber, byte[] bytes) throws IOException {
         if (blockNumber < 0) {
             throw new IllegalArgumentException("blockNumber cannot be negative");
