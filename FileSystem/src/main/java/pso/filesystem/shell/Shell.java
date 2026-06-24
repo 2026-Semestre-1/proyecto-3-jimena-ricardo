@@ -4,10 +4,13 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Scanner;
 import pso.filesystem.BootBlock;
 import pso.filesystem.BinaryFormatValidator;
+import pso.filesystem.DirectoryEntry;
 import pso.filesystem.FreeSpaceBitmap;
+import pso.filesystem.IndexBlock;
 import pso.filesystem.Inode;
 import pso.filesystem.InodeType;
 import pso.filesystem.SuperBlock;
@@ -166,19 +169,22 @@ public class Shell {
         int userTableBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
         int groupTableBlock = userTableBlock + 1;
         int dataRegionStartBlock = groupTableBlock + 1;
+        int rootIndexBlock = dataRegionStartBlock;
+        int rootDirectoryDataBlock = rootIndexBlock + 1;
+        int rootHomeIndexBlock = rootDirectoryDataBlock + 1;
+        int rootHomeDirectoryDataBlock = rootHomeIndexBlock + 1;
+        int homeIndexBlock = rootHomeDirectoryDataBlock + 1;
+        int homeDirectoryDataBlock = homeIndexBlock + 1;
 
-        if (totalBlocks <= dataRegionStartBlock) {
+        if (totalBlocks <= homeDirectoryDataBlock) {
             System.out.println("disk is too small for the initial filesystem layout");
             return;
         }
 
         FreeSpaceBitmap bitmap = new FreeSpaceBitmap(totalBlocks);
-        bitmap.markUsed(0);
-        bitmap.markUsed(SUPER_BLOCK_INDEX);
-        for (int block = BITMAP_START_BLOCK; block < BITMAP_START_BLOCK + bitmapBlockCount; block++) {
+        for (int block = 0; block <= homeDirectoryDataBlock; block++) {
             bitmap.markUsed(block);
         }
-        bitmap.markUsed(inodeTableStartBlock);
 
         int usedBlocks = bitmap.usedCount();
         long now = System.currentTimeMillis();
@@ -228,9 +234,9 @@ public class Shell {
                     DEFAULT_DIRECTORY_PERMISSIONS,
                     ROOT_USER_ID,
                     ROOT_GROUP_ID,
-                    0,
-                    Inode.NO_INDEX_BLOCK,
-                    1,
+                    4L * DirectoryEntry.BINARY_SIZE,
+                    rootIndexBlock,
+                    4,
                     now,
                     now,
                     now
@@ -241,9 +247,9 @@ public class Shell {
                     DEFAULT_DIRECTORY_PERMISSIONS,
                     ROOT_USER_ID,
                     ROOT_GROUP_ID,
-                    0,
-                    Inode.NO_INDEX_BLOCK,
-                    1,
+                    2L * DirectoryEntry.BINARY_SIZE,
+                    rootHomeIndexBlock,
+                    2,
                     now,
                     now,
                     now
@@ -254,14 +260,42 @@ public class Shell {
                     DEFAULT_DIRECTORY_PERMISSIONS,
                     ROOT_USER_ID,
                     ROOT_GROUP_ID,
-                    0,
-                    Inode.NO_INDEX_BLOCK,
-                    1,
+                    2L * DirectoryEntry.BINARY_SIZE,
+                    homeIndexBlock,
+                    2,
                     now,
                     now,
                     now
             ));
             disk.writeBlock(inodeTableStartBlock, inodeTableBlock);
+            for (int block = inodeTableStartBlock + 1; block < inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT; block++) {
+                disk.writeBlock(block, new byte[blockSize]);
+            }
+            disk.writeBlock(userTableBlock, new byte[blockSize]);
+            disk.writeBlock(groupTableBlock, new byte[blockSize]);
+
+            disk.writeBlock(rootIndexBlock, new IndexBlock(List.of(rootDirectoryDataBlock)).toBytes(blockSize));
+            disk.writeBlock(rootDirectoryDataBlock, directoryDataBlock(
+                    blockSize,
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "."),
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, ".."),
+                    new DirectoryEntry(ROOT_HOME_INODE_ID, InodeType.DIRECTORY, "root"),
+                    new DirectoryEntry(HOME_INODE_ID, InodeType.DIRECTORY, "home")
+            ));
+
+            disk.writeBlock(rootHomeIndexBlock, new IndexBlock(List.of(rootHomeDirectoryDataBlock)).toBytes(blockSize));
+            disk.writeBlock(rootHomeDirectoryDataBlock, directoryDataBlock(
+                    blockSize,
+                    new DirectoryEntry(ROOT_HOME_INODE_ID, InodeType.DIRECTORY, "."),
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
+            ));
+
+            disk.writeBlock(homeIndexBlock, new IndexBlock(List.of(homeDirectoryDataBlock)).toBytes(blockSize));
+            disk.writeBlock(homeDirectoryDataBlock, directoryDataBlock(
+                    blockSize,
+                    new DirectoryEntry(HOME_INODE_ID, InodeType.DIRECTORY, "."),
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
+            ));
 
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
@@ -272,6 +306,21 @@ public class Shell {
     private void writeInodeToTableBlock(byte[] inodeTableBlock, int inodeSlot, Inode inode) {
         byte[] inodeBytes = inode.toBytes();
         System.arraycopy(inodeBytes, 0, inodeTableBlock, inodeSlot * Inode.BINARY_SIZE, Inode.BINARY_SIZE);
+    }
+
+    private byte[] directoryDataBlock(int blockSize, DirectoryEntry... entries) {
+        byte[] block = new byte[blockSize];
+        int requiredBytes = entries.length * DirectoryEntry.BINARY_SIZE;
+        if (requiredBytes > blockSize) {
+            throw new IllegalArgumentException("directory entries do not fit in one block");
+        }
+
+        for (int i = 0; i < entries.length; i++) {
+            byte[] entryBytes = entries[i].toBytes();
+            System.arraycopy(entryBytes, 0, block, i * DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
+        }
+
+        return block;
     }
 
     private void hexdump(ParsedCommand parsedCommand) {
