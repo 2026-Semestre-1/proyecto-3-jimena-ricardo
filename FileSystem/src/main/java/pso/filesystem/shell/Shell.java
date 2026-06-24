@@ -19,7 +19,8 @@ import pso.filesystem.VirtualDisk;
 
 public class Shell {
 
-    private FileSystem currentFileSystem;
+    private Session session;
+    private SessionManager sessionManager;
 
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
@@ -36,11 +37,33 @@ public class Shell {
         Scanner sc = new Scanner(System.in);
         boolean running = true;
         while (running) {
-            System.out.print("ricardo@fs> ");
+            System.out.print(prompt());
             String command = sc.nextLine();
             ParsedCommand parsedCommand = parse(command);
             running = dispatch(parsedCommand);
         }
+    }
+
+    private String prompt() {
+        String user = session == null ? "[no user]" : currentUserName();
+        String disk = session == null ? "[no disk]" : diskNameWithoutExtension(session.fileSystem().diskName());
+        return user + "@" + disk + "> ";
+    }
+
+    private String currentUserName() {
+        if (session.currentUserId() == 0) {
+            return "root";
+        }
+
+        return "user" + session.currentUserId();
+    }
+
+    private String diskNameWithoutExtension(String diskName) {
+        if (diskName.endsWith(".fs")) {
+            return diskName.substring(0, diskName.length() - 3);
+        }
+
+        return diskName;
     }
 
     private ParsedCommand parse(String input) {
@@ -301,7 +324,9 @@ public class Shell {
                     new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
             ));
 
-            currentFileSystem = FileSystem.mount(diskName);
+            FileSystem fileSystem = FileSystem.mount(diskName);
+            sessionManager = new SessionManager(fileSystem);
+            session = sessionManager.createRootSession();
             System.out.println("formatted disk '" + diskName + "' with " + sizeMb + " MB");
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("format failed: " + ex.getMessage());
@@ -355,7 +380,7 @@ public class Shell {
             }
         }
 
-        try (FileInputStream input = new FileInputStream(currentFileSystem.diskName())) {
+        try (FileInputStream input = new FileInputStream(session.fileSystem().diskName())) {
             long skipped = skipFully(input, startOffset);
             if (skipped < startOffset) {
                 System.out.println("offset is beyond end of file");
@@ -401,8 +426,8 @@ public class Shell {
             return;
         }
 
-        BootBlock bootBlock = currentFileSystem.bootBlock();
-        SuperBlock superBlock = currentFileSystem.superBlock();
+        BootBlock bootBlock = session.fileSystem().bootBlock();
+        SuperBlock superBlock = session.fileSystem().superBlock();
         System.out.println("File system name: " + bootBlock.volumeName() +
                            "\nTotal space: " + bootBlock.diskSizeBytes() / 1024 / 1024 + " MB" +
                            "\nUsed space: " + superBlock.usedBlocks() / 1024 + " MB" +
@@ -410,7 +435,7 @@ public class Shell {
     }
 
     private boolean hasCurrentDisk() {
-        if (currentFileSystem == null) {
+        if (session == null) {
             System.out.println("no disk is currently selected");
             return false;
         }
