@@ -12,11 +12,11 @@ import java.awt.*;
  */
 public class MainFrame extends JFrame {
 
-    private static final Color TAB_BG      = new Color(20, 20, 20);
-    private static final Color TAB_FG      = new Color(100, 98, 94);
-    private static final Color TAB_SEL_FG  = new Color(220, 218, 210);
-    private static final Color TAB_SEL_BG  = new Color(13, 13, 13);
-    private static final Color BORDER      = new Color(40, 40, 40);
+    private static final Color TAB_BG     = new Color(240, 240, 240);
+    private static final Color TAB_FG     = new Color(120, 118, 114);
+    private static final Color TAB_SEL_FG = new Color(30,  30,  30);
+    private static final Color TAB_SEL_BG = Color.WHITE;
+    private static final Color BORDER     = new Color(210, 210, 210);
 
     private final JTabbedPane tabbedPane;
     private final DiskViewPanel diskViewPanel;
@@ -36,7 +36,7 @@ public class MainFrame extends JFrame {
                 setUI(new javax.swing.plaf.basic.BasicTabbedPaneUI() {
                     @Override protected void installDefaults() {
                         super.installDefaults();
-                        tabAreaInsets = new Insets(4, 8, 0, 0);
+                        tabAreaInsets = new Insets(6, 8, 0, 0);
                         selectedTabPadInsets = new Insets(0, 0, 0, 0);
                         contentBorderInsets = new Insets(0, 0, 0, 0);
                     }
@@ -58,7 +58,7 @@ public class MainFrame extends JFrame {
         };
         tabbedPane.setBackground(TAB_BG);
         tabbedPane.setForeground(TAB_FG);
-        tabbedPane.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
+        tabbedPane.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
 
         JPanel consolePlaceholder = buildConsolePlaceholder();
 

@@ -23,13 +23,13 @@ public class DiskViewPanel extends JPanel {
     public static final int TYPE_DIRECTORY = 6;
     public static final int TYPE_DATA      = 7;
 
-    private static final Color BG           = new Color(18,  18,  18);
-    private static final Color PANEL_BG     = new Color(24,  24,  24);
-    private static final Color BORDER_COLOR = new Color(40,  40,  40);
-    private static final Color TEXT_PRIMARY = new Color(220, 218, 210);
-    private static final Color TEXT_MUTED   = new Color(100,  98,  94);
-    private static final Color TEXT_DIM     = new Color(60,   59,  57);
-    private static final Color ACCENT       = new Color(93,  202, 165);
+    private static final Color BG           = Color.WHITE;
+    private static final Color PANEL_BG     = new Color(248, 248, 248);
+    private static final Color BORDER_COLOR = new Color(220, 220, 220);
+    private static final Color TEXT_PRIMARY = new Color(30,  30,  30);
+    private static final Color TEXT_MUTED   = new Color(120, 118, 114);
+    private static final Color TEXT_DIM     = new Color(180, 178, 174);
+    private static final Color ACCENT       = new Color(29, 158, 117);
 
     private static final Color[] BLOCK_FILL = {
         new Color(30,  30,  30),
