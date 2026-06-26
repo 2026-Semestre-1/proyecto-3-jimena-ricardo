@@ -1,6 +1,6 @@
 package pso.filesystem;
 
-import pso.ui.MainFrame;
+import pso.filesystem.ui.MainFrame;
 import javax.swing.SwingUtilities;
 
 public class Main {
