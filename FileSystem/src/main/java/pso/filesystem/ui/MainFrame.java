@@ -2,7 +2,7 @@
  * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
  * Click nbfs://nbhost/SystemFileSystem/Templates/GUIForms/JFrame.java to edit this template
  */
-package pso.ui;
+package pso.filesystem.ui;
 
 import javax.swing.*;
 import java.awt.*;
@@ -60,9 +60,8 @@ public class MainFrame extends JFrame {
         tabbedPane.setForeground(TAB_FG);
         tabbedPane.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
 
-        JPanel consolePlaceholder = buildConsolePlaceholder();
-
-        tabbedPane.addTab("Terminal",         consolePlaceholder);
+        ConsoleTab consoleTab = new ConsoleTab();
+        tabbedPane.addTab("Terminal", consoleTab);
         tabbedPane.addTab("Visualizar disco", diskViewPanel);
 
         tabbedPane.setForegroundAt(0, TAB_FG);
