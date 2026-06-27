@@ -110,7 +110,7 @@ public class Shell {
             case "su":
                 break;
             case "whoami":
-                whoami();
+                whoami(parsedCommand);
                 break;
             case "pwd":
                 break;
@@ -306,7 +306,7 @@ public class Shell {
                     true,
                     ROOT_USER_ID,
                     "root",
-                    "Root User",
+                    "Full name of the root user",
                     ROOT_GROUP_ID,
                     ROOT_HOME_INODE_ID,
                     rootPassword));
@@ -446,6 +446,25 @@ public class Shell {
             }
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
+        }
+    }
+
+    private void whoami(ParsedCommand parsedCommand) {
+        if (parsedCommand.operands().length != 0) {
+            System.out.println("usage: whoami");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        try {
+            UserRecord user = session.fileSystem().readUserRecord(session.currentUserId());
+            System.out.println("Username: " + user.username());
+            System.out.println("Full name: " + user.fullName());
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("whoami failed: " + ex.getMessage());
         }
     }
 
