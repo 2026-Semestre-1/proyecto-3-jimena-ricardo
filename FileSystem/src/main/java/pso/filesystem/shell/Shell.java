@@ -3,7 +3,9 @@ package pso.filesystem.shell;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
 import java.util.Scanner;
 import pso.filesystem.BootBlock;
@@ -15,6 +17,8 @@ import pso.filesystem.GroupRecord;
 import pso.filesystem.IndexBlock;
 import pso.filesystem.Inode;
 import pso.filesystem.InodeType;
+import pso.filesystem.PathResolver;
+import pso.filesystem.ResolvedPath;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.UserRecord;
 import pso.filesystem.VirtualDisk;
@@ -122,10 +126,12 @@ public class Shell {
             case "mv":
                 break;
             case "ls":
+                ls(parsedCommand);
                 break;
             case "clear":
                 break;
             case "cd":
+                cd(parsedCommand);
                 break;
             case "whereis":
                 break;
@@ -448,6 +454,117 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void ls(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length > 1) {
+            System.out.println("usage: ls [path]");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String path = operands.length == 0 ? "." : operands[0];
+
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(path, session.currentDirectoryInodeId());
+
+            if (resolved.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("ls failed: " + path + " is not a directory");
+                return;
+            }
+
+            List<DirectoryEntry> entries = session.fileSystem().readDirectoryEntries(resolved.inode());
+            boolean printedAny = false;
+            for (DirectoryEntry entry : entries) {
+                if (entry.name().equals(".") || entry.name().equals("..")) {
+                    continue;
+                }
+
+                System.out.println(formatDirectoryEntry(entry));
+                printedAny = true;
+            }
+
+            if (!printedAny) {
+                System.out.println("(empty)");
+            }
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("ls failed: " + ex.getMessage());
+        }
+    }
+
+    private String formatDirectoryEntry(DirectoryEntry entry) {
+        return switch (entry.type()) {
+            case DIRECTORY -> entry.name() + "/";
+            case FILE -> entry.name();
+            case SYMLINK -> entry.name() + "@";
+            case UNUSED -> entry.name();
+        };
+    }
+
+    private void cd(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: cd <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String path = operands[0];
+
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(path, session.currentDirectoryInodeId());
+
+            if (resolved.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("cd failed: not a directory");
+                return;
+            }
+
+            session.setCurrentDirectoryInodeId(resolved.inodeId());
+            session.setCurrentPath(normalizePath(session.currentPath(), path));
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("cd failed: " + ex.getMessage());
+        }
+    }
+
+    private String normalizePath(String currentPath, String inputPath) {
+        Deque<String> stack = new ArrayDeque<>();
+        String combined;
+
+        if (inputPath.startsWith("/")) {
+            combined = inputPath;
+        } else if (currentPath.equals("/")) {
+            combined = "/" + inputPath;
+        } else {
+            combined = currentPath + "/" + inputPath;
+        }
+
+        for (String part : combined.split("/")) {
+            if (part.isEmpty() || part.equals(".")) {
+                continue;
+            }
+            if (part.equals("..")) {
+                if (!stack.isEmpty()) {
+                    stack.removeLast();
+                }
+            } else {
+                stack.addLast(part);
+            }
+        }
+
+        if (stack.isEmpty()) {
+            return "/";
+        }
+
+        return "/" + String.join("/", stack);
     }
 
     private void pwd(ParsedCommand parsedCommand) {
