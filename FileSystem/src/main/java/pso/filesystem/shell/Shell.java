@@ -113,6 +113,7 @@ public class Shell {
                 whoami(parsedCommand);
                 break;
             case "pwd":
+                pwd(parsedCommand);
                 break;
             case "mkdir":
                 break;
@@ -447,6 +448,19 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void pwd(ParsedCommand parsedCommand) {
+        if (parsedCommand.operands().length != 0) {
+            System.out.println("usage: pwd");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        System.out.println(session.currentPath());
     }
 
     private void whoami(ParsedCommand parsedCommand) {

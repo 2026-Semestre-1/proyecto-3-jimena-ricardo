@@ -6,6 +6,7 @@ public final class SessionManager {
 
     public static final int ROOT_USER_ID = 0;
     public static final int ROOT_HOME_INODE_ID = 2;
+    public static final String ROOT_HOME_PATH = "/root";
 
     private final FileSystem fileSystem;
     private int nextSessionId = 1;
@@ -18,10 +19,10 @@ public final class SessionManager {
     }
 
     public Session createRootSession() {
-        return new Session(nextSessionId++, fileSystem, ROOT_USER_ID, ROOT_HOME_INODE_ID);
+        return new Session(nextSessionId++, fileSystem, ROOT_USER_ID, ROOT_HOME_INODE_ID, ROOT_HOME_PATH);
     }
 
-    public Session createUserSession(int userId, int homeDirectoryInodeId) {
-        return new Session(nextSessionId++, fileSystem, userId, homeDirectoryInodeId);
+    public Session createUserSession(int userId, int homeDirectoryInodeId, String homePath) {
+        return new Session(nextSessionId++, fileSystem, userId, homeDirectoryInodeId, homePath);
     }
 }

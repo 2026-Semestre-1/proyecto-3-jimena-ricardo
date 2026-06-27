@@ -8,8 +8,9 @@ public final class Session {
     private final FileSystem fileSystem;
     private int currentUserId;
     private int currentDirectoryInodeId;
+    private String currentPath;
 
-    Session(int sessionId, FileSystem fileSystem, int currentUserId, int currentDirectoryInodeId) {
+    Session(int sessionId, FileSystem fileSystem, int currentUserId, int currentDirectoryInodeId, String currentPath) {
         if (sessionId <= 0) {
             throw new IllegalArgumentException("sessionId must be positive");
         }
@@ -22,11 +23,13 @@ public final class Session {
         if (currentDirectoryInodeId <= 0) {
             throw new IllegalArgumentException("currentDirectoryInodeId must be positive");
         }
+        validateAbsolutePath(currentPath);
 
         this.sessionId = sessionId;
         this.fileSystem = fileSystem;
         this.currentUserId = currentUserId;
         this.currentDirectoryInodeId = currentDirectoryInodeId;
+        this.currentPath = currentPath;
     }
 
     public int sessionId() {
@@ -59,7 +62,22 @@ public final class Session {
         this.currentDirectoryInodeId = currentDirectoryInodeId;
     }
 
+    public String currentPath() {
+        return currentPath;
+    }
+
+    public void setCurrentPath(String currentPath) {
+        validateAbsolutePath(currentPath);
+        this.currentPath = currentPath;
+    }
+
     public boolean isRoot() {
         return currentUserId == 0;
+    }
+
+    private static void validateAbsolutePath(String path) {
+        if (path == null || path.isBlank() || !path.startsWith("/")) {
+            throw new IllegalArgumentException("currentPath must be an absolute path");
+        }
     }
 }
