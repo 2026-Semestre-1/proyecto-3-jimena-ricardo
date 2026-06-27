@@ -43,6 +43,7 @@ public class Shell {
     private static final int ROOT_USER_ID = 0;
     private static final int ROOT_GROUP_ID = 0;
     private static final int DEFAULT_DIRECTORY_PERMISSIONS = 0x75;
+    private static final int DEFAULT_FILE_PERMISSIONS = 0x64;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter
             .ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
@@ -145,6 +146,7 @@ public class Shell {
             case "ln":
                 break;
             case "touch":
+                touch(parsedCommand);
                 break;
             case "cat":
                 break;
@@ -464,6 +466,90 @@ public class Shell {
         }
     }
 
+    private void touch(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: touch <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+
+            try {
+                ResolvedPath existing = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+                updateInodeTimestamps(existing.inode());
+                return;
+            } catch (IllegalArgumentException ex) {
+                // The path does not currently resolve; try to create a new empty file below.
+            }
+
+            String cleanedPath = removeTrailingSlashes(inputPath);
+            String fileName = fileNameFromInputPath(cleanedPath);
+            if (fileName.equals("/") || fileName.equals(".") || fileName.equals("..")) {
+                System.out.println("touch failed: invalid file name");
+                return;
+            }
+
+            String parentPath = parentPathFromInputPath(cleanedPath);
+            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            if (parent.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("touch failed: parent is not a directory");
+                return;
+            }
+
+            FileSystem fileSystem = session.fileSystem();
+            int newInodeId = fileSystem.allocateInodeId();
+            long now = System.currentTimeMillis();
+            Inode newFileInode = new Inode(
+                    newInodeId,
+                    InodeType.FILE,
+                    DEFAULT_FILE_PERMISSIONS,
+                    session.currentUserId(),
+                    parent.inode().groupId(),
+                    0,
+                    Inode.NO_INDEX_BLOCK,
+                    1,
+                    now,
+                    now,
+                    now
+            );
+
+            fileSystem.writeInode(newFileInode);
+            fileSystem.appendDirectoryEntry(
+                    parent.inode(),
+                    new DirectoryEntry(newInodeId, InodeType.FILE, fileName)
+            );
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("touch failed: " + ex.getMessage());
+        }
+    }
+
+    private void updateInodeTimestamps(Inode inode) throws IOException {
+        long now = System.currentTimeMillis();
+        Inode updatedInode = new Inode(
+                inode.inodeId(),
+                inode.type(),
+                inode.permissions(),
+                inode.ownerUserId(),
+                inode.groupId(),
+                inode.sizeBytes(),
+                inode.indexBlockId(),
+                inode.linkCount(),
+                inode.createdTimeMillis(),
+                now,
+                now
+        );
+
+        session.fileSystem().writeInode(updatedInode);
+    }
+
     private void mkdir(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -632,6 +718,48 @@ public class Shell {
         }
 
         return absolutePath.substring(0, lastSlash);
+    }
+
+    private String removeTrailingSlashes(String path) {
+        if (path.equals("/")) {
+            return path;
+        }
+
+        String cleaned = path;
+        while (cleaned.endsWith("/") && cleaned.length() > 1) {
+            cleaned = cleaned.substring(0, cleaned.length() - 1);
+        }
+
+        return cleaned;
+    }
+
+    private String fileNameFromInputPath(String path) {
+        if (path.equals("/")) {
+            return "/";
+        }
+
+        int lastSlash = path.lastIndexOf('/');
+        if (lastSlash == -1) {
+            return path;
+        }
+
+        return path.substring(lastSlash + 1);
+    }
+
+    private String parentPathFromInputPath(String path) {
+        if (path.equals("/")) {
+            return "/";
+        }
+
+        int lastSlash = path.lastIndexOf('/');
+        if (lastSlash == -1) {
+            return ".";
+        }
+        if (lastSlash == 0) {
+            return "/";
+        }
+
+        return path.substring(0, lastSlash);
     }
 
     private String formatMillis(long millis) {
