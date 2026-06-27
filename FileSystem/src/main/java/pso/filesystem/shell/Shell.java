@@ -3,6 +3,9 @@ package pso.filesystem.shell;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
@@ -40,6 +43,9 @@ public class Shell {
     private static final int ROOT_USER_ID = 0;
     private static final int ROOT_GROUP_ID = 0;
     private static final int DEFAULT_DIRECTORY_PERMISSIONS = 0x75;
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter
+            .ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
 
     public void start() {
         Scanner sc = new Scanner(System.in);
@@ -152,6 +158,7 @@ public class Shell {
             case "viewFilesOpen":
                 break;
             case "viewFCB":
+                viewFCB(parsedCommand);
                 break;
             case "infoFS":
                 infoFS(parsedCommand);
@@ -454,6 +461,61 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void viewFCB(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: viewFCB <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+            String absolutePath = normalizePath(session.currentPath(), inputPath);
+            String fileName = fileNameFromPath(absolutePath);
+            printInode(fileName, absolutePath, resolved.inode());
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("viewFCB failed: " + ex.getMessage());
+        }
+    }
+
+    private void printInode(String fileName, String absolutePath, Inode inode) throws IOException {
+        UserRecord owner = session.fileSystem().readUserRecord(inode.ownerUserId());
+        GroupRecord group = session.fileSystem().readGroupRecord(inode.groupId());
+
+        System.out.println("Name: " + fileName);
+        System.out.println("Path: " + absolutePath);
+        System.out.println("Inode ID: " + inode.inodeId());
+        System.out.println("Type: " + inode.type());
+        System.out.println("Permissions: " + String.format("%02X", inode.permissions()));
+        System.out.println("Owner: " + owner.username());
+        System.out.println("Group: " + group.groupName());
+        System.out.println("Size bytes: " + inode.sizeBytes());
+        System.out.println("Index block ID: " + inode.indexBlockId());
+        System.out.println("Link count: " + inode.linkCount());
+        System.out.println("Created: " + formatMillis(inode.createdTimeMillis()));
+        System.out.println("Modified: " + formatMillis(inode.modifiedTimeMillis()));
+        System.out.println("Accessed: " + formatMillis(inode.accessedTimeMillis()));
+    }
+
+    private String fileNameFromPath(String path) {
+        if (path.equals("/")) {
+            return "/";
+        }
+
+        int lastSlash = path.lastIndexOf('/');
+        return path.substring(lastSlash + 1);
+    }
+
+    private String formatMillis(long millis) {
+        return DATE_FORMATTER.format(Instant.ofEpochMilli(millis));
     }
 
     private void ls(ParsedCommand parsedCommand) {

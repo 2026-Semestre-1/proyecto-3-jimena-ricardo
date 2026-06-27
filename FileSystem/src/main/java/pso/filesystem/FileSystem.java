@@ -67,6 +67,36 @@ public final class FileSystem {
         }
     }
 
+    public GroupRecord readGroupRecord(int groupId) throws IOException {
+        BinaryFormatValidator.requireNonNegative("groupId", groupId);
+
+        int recordsPerBlock = superBlock.blockSize() / GroupRecord.BINARY_SIZE;
+        int blockOffset = groupId / recordsPerBlock;
+        int slotInBlock = groupId % recordsPerBlock;
+
+        if (blockOffset >= superBlock.groupTableBlockCount()) {
+            throw new IllegalArgumentException("group id out of range: " + groupId);
+        }
+
+        int blockNumber = superBlock.groupTableStartBlock() + blockOffset;
+
+        try (VirtualDisk disk = VirtualDisk.openReadOnly(diskName, superBlock.blockSize())) {
+            byte[] block = disk.readBlock(blockNumber);
+            int start = slotInBlock * GroupRecord.BINARY_SIZE;
+            int end = start + GroupRecord.BINARY_SIZE;
+            GroupRecord group = GroupRecord.fromBytes(Arrays.copyOfRange(block, start, end));
+
+            if (!group.used()) {
+                throw new IllegalArgumentException("group does not exist: " + groupId);
+            }
+            if (group.groupId() != groupId) {
+                throw new IllegalArgumentException("group table is inconsistent for group id: " + groupId);
+            }
+
+            return group;
+        }
+    }
+
     public Inode readInode(int inodeId) throws IOException {
         BinaryFormatValidator.requirePositive("inodeId", inodeId);
 
