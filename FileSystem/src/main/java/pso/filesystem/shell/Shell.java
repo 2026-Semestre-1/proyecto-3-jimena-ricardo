@@ -27,7 +27,7 @@ public class Shell {
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
-    private static final int USER_TABLE_BLOCK_COUNT = 8;
+    private static final int USER_TABLE_BLOCK_COUNT = 16;
     private static final int GROUP_TABLE_BLOCK_COUNT = 16;
     private static final int ROOT_INODE_ID = 1;
     private static final int ROOT_HOME_INODE_ID = 2;
@@ -86,7 +86,8 @@ public class Shell {
             }
         }
         String[] options = lastOptionIndex == -1 ? new String[0] : Arrays.copyOfRange(parts, 1, lastOptionIndex + 1);
-        String[] operands = lastOptionIndex == -1 ? Arrays.copyOfRange(parts, 1, parts.length) : Arrays.copyOfRange(parts, lastOptionIndex + 1, parts.length);
+        String[] operands = lastOptionIndex == -1 ? Arrays.copyOfRange(parts, 1, parts.length)
+                : Arrays.copyOfRange(parts, lastOptionIndex + 1, parts.length);
         return new ParsedCommand(name, options, operands);
     }
 
@@ -109,6 +110,7 @@ public class Shell {
             case "su":
                 break;
             case "whoami":
+                whoami();
                 break;
             case "pwd":
                 break;
@@ -226,8 +228,7 @@ public class Shell {
                 totalBlocks,
                 SUPER_BLOCK_INDEX,
                 now,
-                diskName
-        );
+                diskName);
         SuperBlock superBlock = new SuperBlock(
                 totalBlocks,
                 blockSize,
@@ -243,8 +244,7 @@ public class Shell {
                 USER_TABLE_BLOCK_COUNT,
                 groupTableStartBlock,
                 GROUP_TABLE_BLOCK_COUNT,
-                dataRegionStartBlock
-        );
+                dataRegionStartBlock);
 
         try (VirtualDisk disk = VirtualDisk.createOrOverwrite(diskName, diskSizeBytes, blockSize)) {
             disk.writeBlock(0, bootBlock.toBytes());
@@ -255,8 +255,7 @@ public class Shell {
                 byte[] blockBytes = Arrays.copyOfRange(
                         bitmapBytes,
                         block * blockSize,
-                        (block + 1) * blockSize
-                );
+                        (block + 1) * blockSize);
                 disk.writeBlock(BITMAP_START_BLOCK + block, blockBytes);
             }
 
@@ -272,8 +271,7 @@ public class Shell {
                     4,
                     now,
                     now,
-                    now
-            ));
+                    now));
             writeInodeToTableBlock(inodeTableBlock, 1, new Inode(
                     ROOT_HOME_INODE_ID,
                     InodeType.DIRECTORY,
@@ -285,8 +283,7 @@ public class Shell {
                     2,
                     now,
                     now,
-                    now
-            ));
+                    now));
             writeInodeToTableBlock(inodeTableBlock, 2, new Inode(
                     HOME_INODE_ID,
                     InodeType.DIRECTORY,
@@ -298,10 +295,10 @@ public class Shell {
                     2,
                     now,
                     now,
-                    now
-            ));
+                    now));
             disk.writeBlock(inodeTableStartBlock, inodeTableBlock);
-            for (int block = inodeTableStartBlock + 1; block < inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT; block++) {
+            for (int block = inodeTableStartBlock + 1; block < inodeTableStartBlock
+                    + INODE_TABLE_BLOCK_COUNT; block++) {
                 disk.writeBlock(block, new byte[blockSize]);
             }
             byte[] firstUserTableBlock = new byte[blockSize];
@@ -309,10 +306,10 @@ public class Shell {
                     true,
                     ROOT_USER_ID,
                     "root",
+                    "Root User",
                     ROOT_GROUP_ID,
                     ROOT_HOME_INODE_ID,
-                    rootPassword
-            ));
+                    rootPassword));
             disk.writeBlock(userTableStartBlock, firstUserTableBlock);
             for (int block = userTableStartBlock + 1; block < userTableStartBlock + USER_TABLE_BLOCK_COUNT; block++) {
                 disk.writeBlock(block, new byte[blockSize]);
@@ -323,10 +320,10 @@ public class Shell {
                     true,
                     ROOT_GROUP_ID,
                     "root",
-                    new int[] {ROOT_USER_ID}
-            ));
+                    new int[] { ROOT_USER_ID }));
             disk.writeBlock(groupTableStartBlock, firstGroupTableBlock);
-            for (int block = groupTableStartBlock + 1; block < groupTableStartBlock + GROUP_TABLE_BLOCK_COUNT; block++) {
+            for (int block = groupTableStartBlock + 1; block < groupTableStartBlock
+                    + GROUP_TABLE_BLOCK_COUNT; block++) {
                 disk.writeBlock(block, new byte[blockSize]);
             }
 
@@ -336,22 +333,19 @@ public class Shell {
                     new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "."),
                     new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, ".."),
                     new DirectoryEntry(ROOT_HOME_INODE_ID, InodeType.DIRECTORY, "root"),
-                    new DirectoryEntry(HOME_INODE_ID, InodeType.DIRECTORY, "home")
-            ));
+                    new DirectoryEntry(HOME_INODE_ID, InodeType.DIRECTORY, "home")));
 
             disk.writeBlock(rootHomeIndexBlock, new IndexBlock(List.of(rootHomeDirectoryDataBlock)).toBytes(blockSize));
             disk.writeBlock(rootHomeDirectoryDataBlock, directoryDataBlock(
                     blockSize,
                     new DirectoryEntry(ROOT_HOME_INODE_ID, InodeType.DIRECTORY, "."),
-                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
-            ));
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")));
 
             disk.writeBlock(homeIndexBlock, new IndexBlock(List.of(homeDirectoryDataBlock)).toBytes(blockSize));
             disk.writeBlock(homeDirectoryDataBlock, directoryDataBlock(
                     blockSize,
                     new DirectoryEntry(HOME_INODE_ID, InodeType.DIRECTORY, "."),
-                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")
-            ));
+                    new DirectoryEntry(ROOT_INODE_ID, InodeType.DIRECTORY, "..")));
 
             FileSystem fileSystem = FileSystem.mount(diskName);
             sessionManager = new SessionManager(fileSystem);
@@ -468,9 +462,9 @@ public class Shell {
         BootBlock bootBlock = session.fileSystem().bootBlock();
         SuperBlock superBlock = session.fileSystem().superBlock();
         System.out.println("File system name: " + bootBlock.volumeName() +
-                           "\nTotal space: " + bootBlock.diskSizeBytes() / 1024 / 1024 + " MB" +
-                           "\nUsed space: " + superBlock.usedBlocks() / 1024 + " MB" +
-                           "\nFree space: " + superBlock.freeBlocks() / 1024 + " MB");
+                "\nTotal space: " + bootBlock.diskSizeBytes() / 1024 / 1024 + " MB" +
+                "\nUsed space: " + superBlock.usedBlocks() / 1024 + " MB" +
+                "\nFree space: " + superBlock.freeBlocks() / 1024 + " MB");
     }
 
     private boolean hasCurrentDisk() {

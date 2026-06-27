@@ -6,8 +6,9 @@ import java.nio.charset.StandardCharsets;
 
 public final class UserRecord {
 
-    public static final int BINARY_SIZE = 64;
+    public static final int BINARY_SIZE = 128;
     public static final int USERNAME_SIZE = 32;
+    public static final int FULL_NAME_SIZE = 64;
     public static final int PASSWORD_SIZE = 16;
 
     private static final ByteOrder BYTE_ORDER = ByteOrder.BIG_ENDIAN;
@@ -15,6 +16,7 @@ public final class UserRecord {
     private final boolean used;
     private final int userId;
     private final String username;
+    private final String fullName;
     private final int primaryGroupId;
     private final int homeDirectoryInodeId;
     private final String password;
@@ -23,6 +25,7 @@ public final class UserRecord {
             boolean used,
             int userId,
             String username,
+            String fullName,
             int primaryGroupId,
             int homeDirectoryInodeId,
             String password
@@ -32,6 +35,10 @@ public final class UserRecord {
             BinaryFormatValidator.requireFixedUtf8Length("username", username, USERNAME_SIZE);
             if (username.isBlank()) {
                 throw new IllegalArgumentException("username cannot be blank");
+            }
+            BinaryFormatValidator.requireFixedUtf8Length("fullName", fullName, FULL_NAME_SIZE);
+            if (fullName.isBlank()) {
+                throw new IllegalArgumentException("fullName cannot be blank");
             }
             BinaryFormatValidator.requireNonNegative("primaryGroupId", primaryGroupId);
             BinaryFormatValidator.requirePositive("homeDirectoryInodeId", homeDirectoryInodeId);
@@ -44,6 +51,7 @@ public final class UserRecord {
         this.used = used;
         this.userId = userId;
         this.username = username == null ? "" : username;
+        this.fullName = fullName == null ? "" : fullName;
         this.primaryGroupId = primaryGroupId;
         this.homeDirectoryInodeId = homeDirectoryInodeId;
         this.password = password == null ? "" : password;
@@ -57,6 +65,7 @@ public final class UserRecord {
         buffer.put(new byte[3]);
         buffer.putInt(userId);
         putFixedString(buffer, username, USERNAME_SIZE);
+        putFixedString(buffer, fullName, FULL_NAME_SIZE);
         buffer.putInt(primaryGroupId);
         buffer.putInt(homeDirectoryInodeId);
         putFixedString(buffer, password, PASSWORD_SIZE);
@@ -74,11 +83,12 @@ public final class UserRecord {
         buffer.position(buffer.position() + 3);
         int userId = buffer.getInt();
         String username = readFixedString(buffer, USERNAME_SIZE);
+        String fullName = readFixedString(buffer, FULL_NAME_SIZE);
         int primaryGroupId = buffer.getInt();
         int homeDirectoryInodeId = buffer.getInt();
         String password = readFixedString(buffer, PASSWORD_SIZE);
 
-        return new UserRecord(used, userId, username, primaryGroupId, homeDirectoryInodeId, password);
+        return new UserRecord(used, userId, username, fullName, primaryGroupId, homeDirectoryInodeId, password);
     }
 
     private static void putFixedString(ByteBuffer buffer, String value, int fieldSize) {
@@ -113,6 +123,10 @@ public final class UserRecord {
 
     public String username() {
         return username;
+    }
+
+    public String fullName() {
+        return fullName;
     }
 
     public int primaryGroupId() {
