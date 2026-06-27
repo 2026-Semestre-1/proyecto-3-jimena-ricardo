@@ -103,6 +103,46 @@ public final class SuperBlock {
         return buffer.array();
     }
 
+    public SuperBlock withBlockCounts(int usedBlocks, int freeBlocks) {
+        return new SuperBlock(
+                totalBlocks,
+                blockSize,
+                usedBlocks,
+                freeBlocks,
+                rootInodeId,
+                nextInodeId,
+                bitmapStartBlock,
+                bitmapBlockCount,
+                inodeTableStartBlock,
+                inodeTableBlockCount,
+                userTableStartBlock,
+                userTableBlockCount,
+                groupTableStartBlock,
+                groupTableBlockCount,
+                dataRegionStartBlock
+        );
+    }
+
+    public SuperBlock withNextInodeId(int nextInodeId) {
+        return new SuperBlock(
+                totalBlocks,
+                blockSize,
+                usedBlocks,
+                freeBlocks,
+                rootInodeId,
+                nextInodeId,
+                bitmapStartBlock,
+                bitmapBlockCount,
+                inodeTableStartBlock,
+                inodeTableBlockCount,
+                userTableStartBlock,
+                userTableBlockCount,
+                groupTableStartBlock,
+                groupTableBlockCount,
+                dataRegionStartBlock
+        );
+    }
+
     public static SuperBlock fromBytes(byte[] bytes) {
         BinaryFormatValidator.requireBytesAtLeast("SuperBlock", bytes, BINARY_SIZE);
 

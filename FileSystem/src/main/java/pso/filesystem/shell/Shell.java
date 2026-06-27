@@ -126,6 +126,7 @@ public class Shell {
                 pwd(parsedCommand);
                 break;
             case "mkdir":
+                mkdir(parsedCommand);
                 break;
             case "rm":
                 break;
@@ -463,6 +464,112 @@ public class Shell {
         }
     }
 
+    private void mkdir(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: mkdir <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+        String absolutePath = normalizePath(session.currentPath(), inputPath);
+        if (absolutePath.equals("/")) {
+            System.out.println("mkdir failed: cannot create root directory");
+            return;
+        }
+
+        String directoryName = fileNameFromPath(absolutePath);
+        if (directoryName.equals(".") || directoryName.equals("..")) {
+            System.out.println("mkdir failed: invalid directory name");
+            return;
+        }
+
+        String parentPath = parentPathFromAbsolutePath(absolutePath);
+
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            if (parent.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("mkdir failed: parent is not a directory");
+                return;
+            }
+
+            FileSystem fileSystem = session.fileSystem();
+            for (DirectoryEntry entry : fileSystem.readDirectoryEntries(parent.inode())) {
+                if (entry.name().equals(directoryName)) {
+                    System.out.println("mkdir failed: directory entry already exists: " + directoryName);
+                    return;
+                }
+            }
+
+            int newInodeId = fileSystem.allocateInodeId();
+            int indexBlockId = fileSystem.allocateBlock();
+            int dataBlockId = fileSystem.allocateBlock();
+
+            writeInitialDirectoryBlock(fileSystem, dataBlockId, newInodeId, parent.inodeId());
+            fileSystem.writeIndexBlock(indexBlockId, new IndexBlock(List.of(dataBlockId)));
+
+            long now = System.currentTimeMillis();
+            Inode newDirectoryInode = new Inode(
+                    newInodeId,
+                    InodeType.DIRECTORY,
+                    DEFAULT_DIRECTORY_PERMISSIONS,
+                    session.currentUserId(),
+                    parent.inode().groupId(),
+                    2L * DirectoryEntry.BINARY_SIZE,
+                    indexBlockId,
+                    2,
+                    now,
+                    now,
+                    now
+            );
+            fileSystem.writeInode(newDirectoryInode);
+
+            Inode updatedParent = fileSystem.appendDirectoryEntry(
+                    parent.inode(),
+                    new DirectoryEntry(newInodeId, InodeType.DIRECTORY, directoryName)
+            );
+
+            Inode parentWithUpdatedLinkCount = new Inode(
+                    updatedParent.inodeId(),
+                    updatedParent.type(),
+                    updatedParent.permissions(),
+                    updatedParent.ownerUserId(),
+                    updatedParent.groupId(),
+                    updatedParent.sizeBytes(),
+                    updatedParent.indexBlockId(),
+                    updatedParent.linkCount() + 1,
+                    updatedParent.createdTimeMillis(),
+                    updatedParent.modifiedTimeMillis(),
+                    updatedParent.accessedTimeMillis()
+            );
+            fileSystem.writeInode(parentWithUpdatedLinkCount);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("mkdir failed: " + ex.getMessage());
+        }
+    }
+
+    private void writeInitialDirectoryBlock(
+            FileSystem fileSystem,
+            int dataBlockId,
+            int directoryInodeId,
+            int parentInodeId
+    ) throws IOException {
+        byte[] block = new byte[fileSystem.superBlock().blockSize()];
+
+        DirectoryEntry self = new DirectoryEntry(directoryInodeId, InodeType.DIRECTORY, ".");
+        DirectoryEntry parent = new DirectoryEntry(parentInodeId, InodeType.DIRECTORY, "..");
+
+        System.arraycopy(self.toBytes(), 0, block, 0, DirectoryEntry.BINARY_SIZE);
+        System.arraycopy(parent.toBytes(), 0, block, DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
+
+        fileSystem.writeDataBlock(dataBlockId, block);
+    }
+
     private void viewFCB(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -512,6 +619,19 @@ public class Shell {
 
         int lastSlash = path.lastIndexOf('/');
         return path.substring(lastSlash + 1);
+    }
+
+    private String parentPathFromAbsolutePath(String absolutePath) {
+        if (absolutePath.equals("/")) {
+            return "/";
+        }
+
+        int lastSlash = absolutePath.lastIndexOf('/');
+        if (lastSlash == 0) {
+            return "/";
+        }
+
+        return absolutePath.substring(0, lastSlash);
     }
 
     private String formatMillis(long millis) {

@@ -9,7 +9,7 @@ public final class FileSystem {
 
     private final String diskName;
     private final BootBlock bootBlock;
-    private final SuperBlock superBlock;
+    private SuperBlock superBlock;
 
     private FileSystem(String diskName, BootBlock bootBlock, SuperBlock superBlock) {
         this.diskName = diskName;
@@ -35,6 +35,121 @@ public final class FileSystem {
 
     public SuperBlock superBlock() {
         return superBlock;
+    }
+
+    public FreeSpaceBitmap readFreeSpaceBitmap() throws IOException {
+        int blockSize = superBlock.blockSize();
+        byte[] bitmapBytes = new byte[blockSize * superBlock.bitmapBlockCount()];
+
+        try (VirtualDisk disk = VirtualDisk.openReadOnly(diskName, blockSize)) {
+            for (int i = 0; i < superBlock.bitmapBlockCount(); i++) {
+                byte[] block = disk.readBlock(superBlock.bitmapStartBlock() + i);
+                System.arraycopy(block, 0, bitmapBytes, i * blockSize, blockSize);
+            }
+        }
+
+        return FreeSpaceBitmap.fromBytes(bitmapBytes, superBlock.totalBlocks());
+    }
+
+    public void writeFreeSpaceBitmap(FreeSpaceBitmap bitmap) throws IOException {
+        if (bitmap == null) {
+            throw new IllegalArgumentException("bitmap cannot be null");
+        }
+
+        int blockSize = superBlock.blockSize();
+        byte[] bitmapBytes = bitmap.toBytes(blockSize * superBlock.bitmapBlockCount());
+
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, blockSize)) {
+            for (int i = 0; i < superBlock.bitmapBlockCount(); i++) {
+                byte[] block = Arrays.copyOfRange(
+                        bitmapBytes,
+                        i * blockSize,
+                        (i + 1) * blockSize);
+                disk.writeBlock(superBlock.bitmapStartBlock() + i, block);
+            }
+        }
+    }
+
+    public int allocateBlock() throws IOException {
+        FreeSpaceBitmap bitmap = readFreeSpaceBitmap();
+
+        for (int block = superBlock.dataRegionStartBlock(); block < superBlock.totalBlocks(); block++) {
+            if (bitmap.isFree(block)) {
+                bitmap.markUsed(block);
+                superBlock = superBlock.withBlockCounts(
+                        superBlock.usedBlocks() + 1,
+                        superBlock.freeBlocks() - 1);
+
+                writeFreeSpaceBitmap(bitmap);
+                writeSuperBlock();
+                writeDataBlock(block, new byte[superBlock.blockSize()]);
+
+                return block;
+            }
+        }
+
+        throw new IllegalStateException("no free blocks available");
+    }
+
+    public int allocateInodeId() throws IOException {
+        int inodeId = superBlock.nextInodeId();
+        superBlock = superBlock.withNextInodeId(inodeId + 1);
+        writeSuperBlock();
+        return inodeId;
+    }
+
+    public void writeInode(Inode inode) throws IOException {
+        if (inode == null) {
+            throw new IllegalArgumentException("inode cannot be null");
+        }
+
+        int inodeId = inode.inodeId();
+        int inodesPerBlock = superBlock.blockSize() / Inode.BINARY_SIZE;
+        int blockOffset = (inodeId - 1) / inodesPerBlock;
+        int slotInBlock = (inodeId - 1) % inodesPerBlock;
+
+        if (inodeId <= 0 || blockOffset >= superBlock.inodeTableBlockCount()) {
+            throw new IllegalArgumentException("inode id out of range: " + inodeId);
+        }
+
+        int blockNumber = superBlock.inodeTableStartBlock() + blockOffset;
+
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            byte[] block = disk.readBlock(blockNumber);
+            byte[] inodeBytes = inode.toBytes();
+            System.arraycopy(
+                    inodeBytes,
+                    0,
+                    block,
+                    slotInBlock * Inode.BINARY_SIZE,
+                    Inode.BINARY_SIZE);
+            disk.writeBlock(blockNumber, block);
+        }
+    }
+
+    public void writeIndexBlock(int blockId, IndexBlock indexBlock) throws IOException {
+        if (indexBlock == null) {
+            throw new IllegalArgumentException("indexBlock cannot be null");
+        }
+        BinaryFormatValidator.requireBlockIndex("blockId", blockId, superBlock.totalBlocks());
+
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            disk.writeBlock(blockId, indexBlock.toBytes(superBlock.blockSize()));
+        }
+    }
+
+    public void writeDataBlock(int blockId, byte[] bytes) throws IOException {
+        BinaryFormatValidator.requireBlockIndex("blockId", blockId, superBlock.totalBlocks());
+
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            disk.writeBlock(blockId, bytes);
+        }
+    }
+
+    private void writeSuperBlock() throws IOException {
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, bootBlock.blockSize())) {
+            disk.writeBlock(bootBlock.superBlockIndex(), superBlock.toBytes());
+        }
     }
 
     public UserRecord readUserRecord(int userId) throws IOException {
@@ -163,7 +278,8 @@ public final class FileSystem {
                 }
 
                 byte[] block = disk.readBlock(dataBlockId);
-                int entriesInThisBlock = Math.min(entriesRemaining, superBlock.blockSize() / DirectoryEntry.BINARY_SIZE);
+                int entriesInThisBlock = Math.min(entriesRemaining,
+                        superBlock.blockSize() / DirectoryEntry.BINARY_SIZE);
                 for (int i = 0; i < entriesInThisBlock; i++) {
                     int start = i * DirectoryEntry.BINARY_SIZE;
                     int end = start + DirectoryEntry.BINARY_SIZE;
@@ -178,6 +294,96 @@ public final class FileSystem {
         }
 
         return entries;
+    }
+
+    public Inode appendDirectoryEntry(Inode directoryInode, DirectoryEntry newEntry) throws IOException {
+        if (directoryInode == null) {
+            throw new IllegalArgumentException("directoryInode cannot be null");
+        }
+        if (newEntry == null) {
+            throw new IllegalArgumentException("newEntry cannot be null");
+        }
+        if (directoryInode.type() != InodeType.DIRECTORY) {
+            throw new IllegalArgumentException("inode is not a directory: " + directoryInode.inodeId());
+        }
+        if (directoryInode.sizeBytes() % DirectoryEntry.BINARY_SIZE != 0) {
+            throw new IllegalArgumentException("directory size is not aligned to directory entry size");
+        }
+
+        for (DirectoryEntry existingEntry : readDirectoryEntries(directoryInode)) {
+            if (existingEntry.name().equals(newEntry.name())) {
+                throw new IllegalArgumentException("directory entry already exists: " + newEntry.name());
+            }
+        }
+
+        int entriesPerBlock = superBlock.blockSize() / DirectoryEntry.BINARY_SIZE;
+        if (entriesPerBlock <= 0) {
+            throw new IllegalStateException("block size is too small for directory entries");
+        }
+
+        int existingEntryCount = Math.toIntExact(directoryInode.sizeBytes() / DirectoryEntry.BINARY_SIZE);
+        int indexBlockId = directoryInode.indexBlockId();
+        List<Integer> dataBlockIds;
+
+        if (indexBlockId == Inode.NO_INDEX_BLOCK) {
+            if (existingEntryCount != 0) {
+                throw new IllegalArgumentException("directory has entries but no index block: " + directoryInode.inodeId());
+            }
+
+            indexBlockId = allocateBlock();
+            dataBlockIds = new ArrayList<>();
+        } else {
+            dataBlockIds = new ArrayList<>(readIndexBlock(indexBlockId).blockPointers());
+        }
+
+        int targetPointerIndex = existingEntryCount / entriesPerBlock;
+        int entryIndexInBlock = existingEntryCount % entriesPerBlock;
+        int indexBlockCapacity = superBlock.blockSize() / Integer.BYTES;
+        if (targetPointerIndex >= indexBlockCapacity) {
+            throw new IllegalStateException("directory index block is full");
+        }
+        if (targetPointerIndex > dataBlockIds.size()) {
+            throw new IllegalArgumentException("directory index block does not match directory size");
+        }
+
+        int targetDataBlockId;
+        byte[] dataBlock;
+
+        if (targetPointerIndex < dataBlockIds.size()) {
+            targetDataBlockId = dataBlockIds.get(targetPointerIndex);
+
+            try (VirtualDisk disk = VirtualDisk.openReadOnly(diskName, superBlock.blockSize())) {
+                dataBlock = disk.readBlock(targetDataBlockId);
+            }
+        } else {
+            targetDataBlockId = allocateBlock();
+            dataBlockIds.add(targetDataBlockId);
+            dataBlock = new byte[superBlock.blockSize()];
+            writeIndexBlock(indexBlockId, new IndexBlock(dataBlockIds));
+        }
+
+        int entryOffset = entryIndexInBlock * DirectoryEntry.BINARY_SIZE;
+        byte[] entryBytes = newEntry.toBytes();
+        System.arraycopy(entryBytes, 0, dataBlock, entryOffset, DirectoryEntry.BINARY_SIZE);
+        writeDataBlock(targetDataBlockId, dataBlock);
+
+        long now = System.currentTimeMillis();
+        Inode updatedDirectoryInode = new Inode(
+                directoryInode.inodeId(),
+                directoryInode.type(),
+                directoryInode.permissions(),
+                directoryInode.ownerUserId(),
+                directoryInode.groupId(),
+                directoryInode.sizeBytes() + DirectoryEntry.BINARY_SIZE,
+                indexBlockId,
+                directoryInode.linkCount(),
+                directoryInode.createdTimeMillis(),
+                now,
+                now
+        );
+
+        writeInode(updatedDirectoryInode);
+        return updatedDirectoryInode;
     }
 
     public DirectoryEntry findDirectoryEntry(int directoryInodeId, String name) throws IOException {
