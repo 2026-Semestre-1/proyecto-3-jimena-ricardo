@@ -30,7 +30,7 @@ public class Shell {
 
     private Session session;
     private SessionManager sessionManager;
-
+    
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
     private static final int INODE_TABLE_BLOCK_COUNT = 8;
@@ -169,12 +169,23 @@ public class Shell {
             case "hexdump":
                 hexdump(parsedCommand);
                 break;
+            case "diskusage":
+                diskUsage();
+                break;
             default:
                 System.out.println("Unknown command: " + parsedCommand.name());
                 return true;
         }
 
         return true;
+    }
+    
+    private void diskUsage() {
+    if (!hasCurrentDisk()) return;
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            pso.filesystem.ui.DiskUsageWindow window = new pso.filesystem.ui.DiskUsageWindow(session.fileSystem());
+            window.setVisible(true);
+        });
     }
 
     private void format(ParsedCommand parsedCommand) {
@@ -983,5 +994,9 @@ public class Shell {
                 && !fileName.contains("\\")
                 && !fileName.equals(".")
                 && !fileName.equals("..");
+    }
+
+    public Session getSession() {
+        return session;
     }
 }
