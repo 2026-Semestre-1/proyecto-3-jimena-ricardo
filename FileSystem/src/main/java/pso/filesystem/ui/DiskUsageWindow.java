@@ -11,7 +11,11 @@ import pso.filesystem.SuperBlock;
 import javax.swing.*;
 import javax.swing.border.*;
 import java.awt.*;
+import pso.filesystem.DirectoryEntry;
 import pso.filesystem.FreeSpaceBitmap;
+import pso.filesystem.IndexBlock;
+import pso.filesystem.Inode;
+import pso.filesystem.InodeType;
 /**
  *
  * @author jimen
@@ -142,12 +146,12 @@ public class DiskUsageWindow extends JFrame {
     }
 
     private void loadFromFileSystem(FileSystem fs) {
-        BootBlock  boot  = fs.bootBlock();
-        SuperBlock sup   = fs.superBlock();
+        BootBlock  boot = fs.bootBlock();
+        SuperBlock sup  = fs.superBlock();
 
-        this.diskName   = boot.volumeName();
-        this.totalBytes = boot.diskSizeBytes();
-        this.usedBytes  = (long) sup.usedBlocks() * sup.blockSize();
+        this.diskName    = boot.volumeName();
+        this.totalBytes  = boot.diskSizeBytes();
+        this.usedBytes   = (long) sup.usedBlocks() * sup.blockSize();
         this.totalBlocks = sup.totalBlocks();
 
         blockTypes  = new int[totalBlocks];
@@ -163,7 +167,6 @@ public class DiskUsageWindow extends JFrame {
 
         blockTypes[0] = TYPE_META;
         blockTypes[1] = TYPE_META;
-
         for (int i = sup.bitmapStartBlock(); i < sup.bitmapStartBlock() + sup.bitmapBlockCount(); i++)
             blockTypes[i] = TYPE_BITMAP;
         for (int i = sup.inodeTableStartBlock(); i < sup.inodeTableStartBlock() + sup.inodeTableBlockCount(); i++)
@@ -174,11 +177,43 @@ public class DiskUsageWindow extends JFrame {
             blockTypes[i] = TYPE_USERTABLE;
 
         for (int i = sup.dataRegionStartBlock(); i < totalBlocks; i++) {
-            if (bitmap != null && bitmap.isUsed(i)) {
-                blockTypes[i] = TYPE_DATA;
-            } else {
-                blockTypes[i] = TYPE_FREE;
+            blockTypes[i] = (bitmap != null && bitmap.isUsed(i)) ? TYPE_DATA : TYPE_FREE;
+        }
+
+        try {
+            int inodeSize     = Inode.BINARY_SIZE;
+            int blockSize     = sup.blockSize();
+            int inodesPerBlock = blockSize / inodeSize;
+            int totalInodeSlots = sup.inodeTableBlockCount() * inodesPerBlock;
+
+            for (int slot = 0; slot < totalInodeSlots; slot++) {
+                try {
+                    Inode inode = fs.readInode(slot + 1);
+                    if (inode.type() == InodeType.UNUSED) continue;
+                    if (inode.indexBlockId() == Inode.NO_INDEX_BLOCK) continue;
+
+                    String name = resolveInodeName(fs, inode.inodeId(), sup.rootInodeId());
+                    if (name == null) name = "[inode " + inode.inodeId() + "]";
+
+                    int idxBlock = inode.indexBlockId();
+                    if (idxBlock >= 0 && idxBlock < totalBlocks) {
+                        blockTypes[idxBlock]  = TYPE_INDEX;
+                        blockInodes[idxBlock] = inode.inodeId();
+                        blockOwners[idxBlock] = name;
+                    }
+                    IndexBlock indexBlock = fs.readIndexBlock(idxBlock);
+                    int dataType = inode.type() == InodeType.DIRECTORY ? TYPE_DIRECTORY : TYPE_DATA;
+                    for (int dataBlock : indexBlock.blockPointers()) {
+                        if (dataBlock >= 0 && dataBlock < totalBlocks) {
+                            blockTypes[dataBlock]  = dataType;
+                            blockInodes[dataBlock] = inode.inodeId();
+                            blockOwners[dataBlock] = name;
+                        }
+                    }
+                } catch (IllegalArgumentException ignored) {}
             }
+        } catch (java.io.IOException e) {
+            System.err.println("Error leyendo inodos: " + e.getMessage());
         }
 
         nameLabel.setText(diskName);
@@ -187,6 +222,30 @@ public class DiskUsageWindow extends JFrame {
         freeLabel.setText(formatBytes(totalBytes - usedBytes));
         usageBar.setRatio(totalBytes > 0 ? (double) usedBytes / totalBytes : 0);
     }
+
+    private String resolveInodeName(FileSystem fs, int targetInodeId, int rootInodeId) {
+        try {
+            Inode rootInode = fs.readInode(rootInodeId);
+            return searchName(fs, rootInode, "/", targetInodeId);
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
+    private String searchName(FileSystem fs, Inode dirInode, String currentPath, int targetInodeId) throws java.io.IOException {
+        for (DirectoryEntry entry : fs.readDirectoryEntries(dirInode)) {
+            if (entry.name().equals(".") || entry.name().equals("..")) continue;
+            String entryPath = currentPath.equals("/") ? "/" + entry.name() : currentPath + "/" + entry.name();
+            if (entry.inodeId() == targetInodeId) return entryPath;
+            if (entry.type() == InodeType.DIRECTORY) {
+                Inode child = fs.readInode(entry.inodeId());
+                String found = searchName(fs, child, entryPath, targetInodeId);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+    
     private JPanel buildHeader() {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(PANEL_BG);

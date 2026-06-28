@@ -135,6 +135,7 @@ public class Shell {
                 rm(parsedCommand);
                 break;
             case "mv":
+                mv(parsedCommand);
                 break;
             case "ls":
                 ls(parsedCommand);
@@ -189,6 +190,162 @@ public class Shell {
         }
 
         return true;
+    }
+    
+    private void mv(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 2) {
+            System.out.println("usage: mv <source> <destination>");
+            System.out.println("  move:     mv archivo.txt /home/user/docs/");
+            System.out.println("  rename:   mv viejo.txt nuevo.txt");
+            return;
+        }
+        if (!hasCurrentDisk()) return;
+
+        String srcInput = operands[0];
+        String dstInput = operands[1];
+
+        try {
+            FileSystem fs = session.fileSystem();
+            PathResolver resolver = new PathResolver(fs);
+
+            ResolvedPath src = resolver.resolve(srcInput, session.currentDirectoryInodeId());
+            String srcName       = fileNameFromInputPath(srcInput);
+            String srcParentPath = parentPathFromInputPath(srcInput);
+            ResolvedPath srcParent = resolver.resolve(srcParentPath, session.currentDirectoryInodeId());
+
+            String dstParentInput;
+            String newName;
+
+            try {
+                ResolvedPath dstResolved = resolver.resolve(dstInput, session.currentDirectoryInodeId());
+                if (dstResolved.inode().type() == InodeType.DIRECTORY) {
+                    dstParentInput = dstInput;
+                    newName        = srcName;
+                } else {
+                    dstParentInput = parentPathFromInputPath(dstInput);
+                    newName        = fileNameFromInputPath(dstInput);
+                }
+            } catch (IllegalArgumentException e) {
+                dstParentInput = parentPathFromInputPath(dstInput);
+                newName        = fileNameFromInputPath(dstInput);
+            }
+
+            ResolvedPath dstParent = resolver.resolve(dstParentInput, session.currentDirectoryInodeId());
+
+            if (dstParent.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("mv failed: destination parent is not a directory");
+                return;
+            }
+
+            for (DirectoryEntry entry : fs.readDirectoryEntries(dstParent.inode())) {
+                if (entry.name().equals(newName)) {
+                    System.out.println("mv failed: destination already exists: " + newName);
+                    return;
+                }
+            }
+
+            boolean sameParent = srcParent.inodeId() == dstParent.inodeId();
+
+            if (sameParent) {
+                Inode freshParent = fs.readInode(srcParent.inodeId());
+                removeDirectoryEntry(freshParent, srcName);
+
+                freshParent = fs.readInode(srcParent.inodeId());
+                fs.appendDirectoryEntry(freshParent,
+                        new DirectoryEntry(src.inodeId(), src.inode().type(), newName));
+
+                System.out.println("renamed: " + srcName + " → " + newName);
+            } else {
+                Inode freshDstParent = fs.readInode(dstParent.inodeId());
+                fs.appendDirectoryEntry(freshDstParent,
+                        new DirectoryEntry(src.inodeId(), src.inode().type(), newName));
+
+                Inode freshSrcParent = fs.readInode(srcParent.inodeId());
+                removeDirectoryEntry(freshSrcParent, srcName);
+
+                if (src.inode().type() == InodeType.DIRECTORY) {
+                    updateParentLink(fs, src.inode(), dstParent.inodeId());
+                }
+
+                System.out.println("moved: " + srcInput + " → " + dstInput + "/" + newName);
+            }
+
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("mv failed: " + ex.getMessage());
+        }
+    }
+
+    private void updateParentLink(FileSystem fs, Inode dirInode, int newParentInodeId) throws IOException {
+        List<DirectoryEntry> entries = fs.readDirectoryEntries(dirInode);
+        int blockSize       = fs.superBlock().blockSize();
+        int entriesPerBlock = blockSize / DirectoryEntry.BINARY_SIZE;
+        IndexBlock indexBlock = fs.readIndexBlock(dirInode.indexBlockId());
+        List<Integer> dataBlocks = indexBlock.blockPointers();
+
+        List<DirectoryEntry> updated = new java.util.ArrayList<>();
+        for (DirectoryEntry e : entries) {
+            if (e.name().equals("..")) {
+                updated.add(new DirectoryEntry(newParentInodeId, InodeType.DIRECTORY, ".."));
+            } else {
+                updated.add(e);
+            }
+        }
+
+        for (int blockIdx = 0; blockIdx < dataBlocks.size(); blockIdx++) {
+            byte[] block = new byte[blockSize];
+            for (int slot = 0; slot < entriesPerBlock; slot++) {
+                int globalIdx = blockIdx * entriesPerBlock + slot;
+                if (globalIdx < updated.size()) {
+                    byte[] entryBytes = updated.get(globalIdx).toBytes();
+                    System.arraycopy(entryBytes, 0, block, slot * DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
+                }
+            }
+            fs.writeDataBlock(dataBlocks.get(blockIdx), block);
+        }
+    }
+
+    private void removeDirectoryEntry(Inode parentInode, String entryName) throws IOException {
+        FileSystem fs = session.fileSystem();
+        List<DirectoryEntry> entries = fs.readDirectoryEntries(parentInode);
+
+        int blockSize       = fs.superBlock().blockSize();
+        int entriesPerBlock = blockSize / DirectoryEntry.BINARY_SIZE;
+        IndexBlock indexBlock = fs.readIndexBlock(parentInode.indexBlockId());
+        List<Integer> dataBlocks = indexBlock.blockPointers();
+
+        List<DirectoryEntry> filtered = new java.util.ArrayList<>();
+        for (DirectoryEntry e : entries) {
+            if (!e.name().equals(entryName)) filtered.add(e);
+        }
+
+        if (filtered.size() == entries.size()) {
+            System.out.println("rm warning: entry not found: " + entryName);
+            return;
+        }
+
+        for (int blockIdx = 0; blockIdx < dataBlocks.size(); blockIdx++) {
+            byte[] block = new byte[blockSize];
+            for (int slot = 0; slot < entriesPerBlock; slot++) {
+                int globalIdx = blockIdx * entriesPerBlock + slot;
+                if (globalIdx < filtered.size()) {
+                    byte[] entryBytes = filtered.get(globalIdx).toBytes();
+                    System.arraycopy(entryBytes, 0, block, slot * DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
+                }
+            }
+            fs.writeDataBlock(dataBlocks.get(blockIdx), block);
+        }
+
+        long now = System.currentTimeMillis();
+        Inode updated = new Inode(
+                parentInode.inodeId(), parentInode.type(), parentInode.permissions(),
+                parentInode.ownerUserId(), parentInode.groupId(),
+                (long) filtered.size() * DirectoryEntry.BINARY_SIZE, 
+                parentInode.indexBlockId(),
+                parentInode.linkCount(),
+                parentInode.createdTimeMillis(), now, now
+        );
+        fs.writeInode(updated);
     }
     
     private void rm(ParsedCommand parsedCommand) {
@@ -264,42 +421,7 @@ public class Shell {
         fs.writeFreeSpaceBitmap(bitmap);
     }
  
-    private void removeDirectoryEntry(Inode parentInode, String entryName) throws IOException {
-        FileSystem fs = session.fileSystem();
-        List<DirectoryEntry> entries = fs.readDirectoryEntries(parentInode);
- 
-        int blockSize = fs.superBlock().blockSize();
-        int entriesPerBlock = blockSize / DirectoryEntry.BINARY_SIZE;
-        IndexBlock indexBlock = fs.readIndexBlock(parentInode.indexBlockId());
-        List<Integer> dataBlocks = indexBlock.blockPointers();
- 
-        List<DirectoryEntry> filtered = new java.util.ArrayList<>();
-        for (DirectoryEntry e : entries) {
-            if (!e.name().equals(entryName)) filtered.add(e);
-        }
- 
-        for (int blockIdx = 0; blockIdx < dataBlocks.size(); blockIdx++) {
-            byte[] block = new byte[blockSize];
-            for (int slot = 0; slot < entriesPerBlock; slot++) {
-                int globalIdx = blockIdx * entriesPerBlock + slot;
-                if (globalIdx < filtered.size()) {
-                    byte[] entryBytes = filtered.get(globalIdx).toBytes();
-                    System.arraycopy(entryBytes, 0, block, slot * DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
-                }
-            }
-            fs.writeDataBlock(dataBlocks.get(blockIdx), block);
-        }
- 
-        long now = System.currentTimeMillis();
-        Inode updated = new Inode(
-                parentInode.inodeId(), parentInode.type(), parentInode.permissions(),
-                parentInode.ownerUserId(), parentInode.groupId(),
-                (long) filtered.size() * DirectoryEntry.BINARY_SIZE,
-                parentInode.indexBlockId(), parentInode.linkCount() - 1,
-                parentInode.createdTimeMillis(), now, now
-        );
-        fs.writeInode(updated);
-    }
+    
     
     private void clear(ParsedCommand parsedCommand) {
         if (parsedCommand.operands().length != 0) {
