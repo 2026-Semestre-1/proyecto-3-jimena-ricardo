@@ -147,6 +147,7 @@ public class Shell {
                 cd(parsedCommand);
                 break;
             case "whereis":
+                whereis(parsedCommand);
                 break;
             case "ln":
                 break;
@@ -190,6 +191,44 @@ public class Shell {
         }
 
         return true;
+    }
+    
+    private void whereis(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: whereis <filename>");
+            return;
+        }
+        if (!hasCurrentDisk()) return;
+ 
+        String target = operands[0];
+        List<String> found = new java.util.ArrayList<>();
+ 
+        try {
+            FileSystem fs = session.fileSystem();
+            Inode rootInode = fs.readInode(fs.superBlock().rootInodeId());
+            searchRecursive(fs, rootInode, "/", target, found);
+ 
+            if (found.isEmpty()) {
+                System.out.println(target + ": not found");
+            } else {
+                for (String path : found) System.out.println(path);
+            }
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("whereis failed: " + ex.getMessage());
+        }
+    }
+ 
+    private void searchRecursive(FileSystem fs, Inode dirInode, String currentPath, String target, List<String> found) throws IOException {
+        for (DirectoryEntry entry : fs.readDirectoryEntries(dirInode)) {
+            if (entry.name().equals(".") || entry.name().equals("..")) continue;
+            String entryPath = currentPath.equals("/") ? "/" + entry.name() : currentPath + "/" + entry.name();
+            if (entry.name().equals(target)) found.add(entryPath);
+            if (entry.type() == InodeType.DIRECTORY) {
+                Inode child = fs.readInode(entry.inodeId());
+                searchRecursive(fs, child, entryPath, target, found);
+            }
+        }
     }
     
     private void mv(ParsedCommand parsedCommand) {
