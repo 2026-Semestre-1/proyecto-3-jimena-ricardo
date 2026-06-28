@@ -132,6 +132,7 @@ public class Shell {
                 mkdir(parsedCommand);
                 break;
             case "rm":
+                rm(parsedCommand);
                 break;
             case "mv":
                 break;
@@ -188,6 +189,116 @@ public class Shell {
         }
 
         return true;
+    }
+    
+    private void rm(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: rm <path>");
+            return;
+        }
+        if (!hasCurrentDisk()) return;
+ 
+        boolean recursive = hasOption(parsedCommand, "-R") || hasOption(parsedCommand, "-r");
+        String inputPath = operands[0];
+        String absolutePath = normalizePath(session.currentPath(), inputPath);
+ 
+        if (absolutePath.equals("/")) {
+            System.out.println("rm failed: cannot remove root directory");
+            return;
+        }
+ 
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath target = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+ 
+            if (target.inode().type() == InodeType.DIRECTORY && !recursive) {
+                System.out.println("rm failed: " + inputPath + " is a directory (use -R to remove recursively)");
+                return;
+            }
+ 
+            String parentPath = parentPathFromInputPath(inputPath);
+            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            String entryName = fileNameFromInputPath(inputPath);
+ 
+            if (target.inode().type() == InodeType.DIRECTORY && recursive) {
+                removeDirectoryRecursive(target, resolver);
+            } else {
+                freeInodeBlocks(target.inode());
+            }
+ 
+            removeDirectoryEntry(parent.inode(), entryName);
+            System.out.println("removed: " + inputPath);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("rm failed: " + ex.getMessage());
+        }
+    }
+    
+    private void removeDirectoryRecursive(ResolvedPath dir, PathResolver resolver) throws IOException {
+        FileSystem fs = session.fileSystem();
+        List<DirectoryEntry> entries = fs.readDirectoryEntries(dir.inode());
+        for (DirectoryEntry entry : entries) {
+            if (entry.name().equals(".") || entry.name().equals("..")) continue;
+            Inode childInode = fs.readInode(entry.inodeId());
+            if (childInode.type() == InodeType.DIRECTORY) {
+                removeDirectoryRecursive(new ResolvedPath(entry.inodeId(), childInode), resolver);
+            } else {
+                freeInodeBlocks(childInode);
+            }
+        }
+        freeInodeBlocks(dir.inode());
+    }
+    
+    private void freeInodeBlocks(Inode inode) throws IOException {
+        FileSystem fs = session.fileSystem();
+        FreeSpaceBitmap bitmap = fs.readFreeSpaceBitmap();
+ 
+        if (inode.indexBlockId() != Inode.NO_INDEX_BLOCK) {
+            IndexBlock indexBlock = fs.readIndexBlock(inode.indexBlockId());
+            for (int dataBlock : indexBlock.blockPointers()) {
+                bitmap.markFree(dataBlock);
+            }
+            bitmap.markFree(inode.indexBlockId());
+        }
+ 
+        fs.writeFreeSpaceBitmap(bitmap);
+    }
+ 
+    private void removeDirectoryEntry(Inode parentInode, String entryName) throws IOException {
+        FileSystem fs = session.fileSystem();
+        List<DirectoryEntry> entries = fs.readDirectoryEntries(parentInode);
+ 
+        int blockSize = fs.superBlock().blockSize();
+        int entriesPerBlock = blockSize / DirectoryEntry.BINARY_SIZE;
+        IndexBlock indexBlock = fs.readIndexBlock(parentInode.indexBlockId());
+        List<Integer> dataBlocks = indexBlock.blockPointers();
+ 
+        List<DirectoryEntry> filtered = new java.util.ArrayList<>();
+        for (DirectoryEntry e : entries) {
+            if (!e.name().equals(entryName)) filtered.add(e);
+        }
+ 
+        for (int blockIdx = 0; blockIdx < dataBlocks.size(); blockIdx++) {
+            byte[] block = new byte[blockSize];
+            for (int slot = 0; slot < entriesPerBlock; slot++) {
+                int globalIdx = blockIdx * entriesPerBlock + slot;
+                if (globalIdx < filtered.size()) {
+                    byte[] entryBytes = filtered.get(globalIdx).toBytes();
+                    System.arraycopy(entryBytes, 0, block, slot * DirectoryEntry.BINARY_SIZE, DirectoryEntry.BINARY_SIZE);
+                }
+            }
+            fs.writeDataBlock(dataBlocks.get(blockIdx), block);
+        }
+ 
+        long now = System.currentTimeMillis();
+        Inode updated = new Inode(
+                parentInode.inodeId(), parentInode.type(), parentInode.permissions(),
+                parentInode.ownerUserId(), parentInode.groupId(),
+                (long) filtered.size() * DirectoryEntry.BINARY_SIZE,
+                parentInode.indexBlockId(), parentInode.linkCount() - 1,
+                parentInode.createdTimeMillis(), now, now
+        );
+        fs.writeInode(updated);
     }
     
     private void clear(ParsedCommand parsedCommand) {
@@ -1249,6 +1360,13 @@ public class Shell {
                 && !fileName.contains("\\")
                 && !fileName.equals(".")
                 && !fileName.equals("..");
+    }
+    
+    private boolean hasOption(ParsedCommand cmd, String option) {
+        for (String opt : cmd.options()) {
+            if (opt.equals(option)) return true;
+        }
+        return false;
     }
 
     public Session getSession() {
