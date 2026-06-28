@@ -139,6 +139,7 @@ public class Shell {
                 ls(parsedCommand);
                 break;
             case "clear":
+                clear(parsedCommand);
                 break;
             case "cd":
                 cd(parsedCommand);
@@ -187,6 +188,15 @@ public class Shell {
         }
 
         return true;
+    }
+    
+    private void clear(ParsedCommand parsedCommand) {
+        if (parsedCommand.operands().length != 0) {
+            System.out.println("usage: clear");
+            return;
+        }
+        System.out.print("\033[H\033[2J");
+        System.out.flush();
     }
     
     private void defragDisk(ParsedCommand parsedCommand) {
