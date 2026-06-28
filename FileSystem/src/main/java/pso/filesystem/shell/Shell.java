@@ -25,6 +25,7 @@ import pso.filesystem.ResolvedPath;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.UserRecord;
 import pso.filesystem.VirtualDisk;
+import pso.filesystem.terminal.NoteEditor;
 import pso.filesystem.ui.DefragWindow;
 
 public class Shell {
@@ -152,6 +153,9 @@ public class Shell {
             case "cat":
                 break;
             case "less":
+                break;
+            case "note":
+                note(parsedCommand);
                 break;
             case "chown":
                 break;
@@ -588,6 +592,86 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void note(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: note <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+
+        try {
+            FileSystem fileSystem = session.fileSystem();
+            PathResolver resolver = new PathResolver(fileSystem);
+            String absolutePath = normalizePath(session.currentPath(), inputPath);
+            Inode fileInode;
+
+            try {
+                ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+                if (resolved.inode().type() != InodeType.FILE) {
+                    System.out.println("note failed: not a file");
+                    return;
+                }
+                fileInode = resolved.inode();
+            } catch (IllegalArgumentException ex) {
+                fileInode = createEmptyFileForNote(absolutePath, resolver);
+            }
+
+            byte[] initialContent = fileSystem.readFileBytes(fileInode);
+            byte[] editedContent = new NoteEditor(absolutePath).edit(initialContent);
+            fileSystem.writeFileBytes(fileInode, editedContent);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("note failed: " + ex.getMessage());
+        }
+    }
+
+    private Inode createEmptyFileForNote(String absolutePath, PathResolver resolver) throws IOException {
+        if (absolutePath.equals("/")) {
+            throw new IllegalArgumentException("invalid file name");
+        }
+
+        String fileName = fileNameFromPath(absolutePath);
+        if (fileName.equals(".") || fileName.equals("..")) {
+            throw new IllegalArgumentException("invalid file name");
+        }
+
+        String parentPath = parentPathFromAbsolutePath(absolutePath);
+        ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+        if (parent.inode().type() != InodeType.DIRECTORY) {
+            throw new IllegalArgumentException("parent is not a directory");
+        }
+
+        FileSystem fileSystem = session.fileSystem();
+        int newInodeId = fileSystem.allocateInodeId();
+        long now = System.currentTimeMillis();
+        Inode newFileInode = new Inode(
+                newInodeId,
+                InodeType.FILE,
+                DEFAULT_FILE_PERMISSIONS,
+                session.currentUserId(),
+                parent.inode().groupId(),
+                0,
+                Inode.NO_INDEX_BLOCK,
+                1,
+                now,
+                now,
+                now
+        );
+
+        fileSystem.writeInode(newFileInode);
+        fileSystem.appendDirectoryEntry(
+                parent.inode(),
+                new DirectoryEntry(newInodeId, InodeType.FILE, fileName)
+        );
+
+        return newFileInode;
     }
 
     private void touch(ParsedCommand parsedCommand) {

@@ -250,6 +250,139 @@ public final class FileSystem {
         }
     }
 
+    public byte[] readFileBytes(Inode fileInode) throws IOException {
+        if (fileInode == null) {
+            throw new IllegalArgumentException("fileInode cannot be null");
+        }
+        if (fileInode.type() != InodeType.FILE) {
+            throw new IllegalArgumentException("inode is not a file: " + fileInode.inodeId());
+        }
+        if (fileInode.sizeBytes() == 0) {
+            return new byte[0];
+        }
+        if (fileInode.indexBlockId() == Inode.NO_INDEX_BLOCK) {
+            throw new IllegalArgumentException("file has data but no index block: " + fileInode.inodeId());
+        }
+
+        int fileSize = Math.toIntExact(fileInode.sizeBytes());
+        int blockSize = superBlock.blockSize();
+        int dataBlocksNeeded = BinaryFormatValidator.ceilDiv(fileSize, blockSize);
+        List<Integer> dataBlockIds = readIndexBlock(fileInode.indexBlockId()).blockPointers();
+        if (dataBlockIds.size() < dataBlocksNeeded) {
+            throw new IllegalArgumentException("file index block does not point to enough data blocks");
+        }
+
+        byte[] result = new byte[fileSize];
+        int bytesCopied = 0;
+
+        try (VirtualDisk disk = VirtualDisk.openReadOnly(diskName, blockSize)) {
+            for (int i = 0; i < dataBlocksNeeded; i++) {
+                byte[] block = disk.readBlock(dataBlockIds.get(i));
+                int bytesToCopy = Math.min(blockSize, fileSize - bytesCopied);
+                System.arraycopy(block, 0, result, bytesCopied, bytesToCopy);
+                bytesCopied += bytesToCopy;
+            }
+        }
+
+        return result;
+    }
+
+    public synchronized Inode writeFileBytes(Inode fileInode, byte[] bytes) throws IOException {
+        if (fileInode == null) {
+            throw new IllegalArgumentException("fileInode cannot be null");
+        }
+        if (bytes == null) {
+            throw new IllegalArgumentException("bytes cannot be null");
+        }
+        if (fileInode.type() != InodeType.FILE) {
+            throw new IllegalArgumentException("inode is not a file: " + fileInode.inodeId());
+        }
+
+        int blockSize = superBlock.blockSize();
+        int maxDataBlocks = blockSize / Integer.BYTES;
+        int requiredDataBlocks = bytes.length == 0 ? 0 : BinaryFormatValidator.ceilDiv(bytes.length, blockSize);
+        if (requiredDataBlocks > maxDataBlocks) {
+            int maxFileBytes = maxDataBlocks * blockSize;
+            throw new IllegalArgumentException("file is too large; max size is " + maxFileBytes + " bytes");
+        }
+
+        List<Integer> oldDataBlockIds = List.of();
+        boolean hadIndexBlock = fileInode.indexBlockId() != Inode.NO_INDEX_BLOCK;
+        if (hadIndexBlock) {
+            oldDataBlockIds = readIndexBlock(fileInode.indexBlockId()).blockPointers();
+        }
+
+        int oldBlockCount = oldDataBlockIds.size() + (hadIndexBlock ? 1 : 0);
+        int newBlockCount = requiredDataBlocks == 0 ? 0 : requiredDataBlocks + 1;
+        if (superBlock.freeBlocks() + oldBlockCount < newBlockCount) {
+            throw new IllegalStateException("no free blocks available");
+        }
+
+        for (int oldDataBlockId : oldDataBlockIds) {
+            freeBlock(oldDataBlockId);
+        }
+        if (hadIndexBlock) {
+            freeBlock(fileInode.indexBlockId());
+        }
+
+        int indexBlockId = Inode.NO_INDEX_BLOCK;
+        List<Integer> newDataBlockIds = new ArrayList<>();
+
+        if (requiredDataBlocks > 0) {
+            indexBlockId = allocateBlock();
+            for (int i = 0; i < requiredDataBlocks; i++) {
+                int dataBlockId = allocateBlock();
+                newDataBlockIds.add(dataBlockId);
+
+                int start = i * blockSize;
+                int end = Math.min(bytes.length, start + blockSize);
+                writeDataBlock(dataBlockId, Arrays.copyOfRange(bytes, start, end));
+            }
+
+            writeIndexBlock(indexBlockId, new IndexBlock(newDataBlockIds));
+        }
+
+        long now = System.currentTimeMillis();
+        Inode updatedInode = new Inode(
+                fileInode.inodeId(),
+                fileInode.type(),
+                fileInode.permissions(),
+                fileInode.ownerUserId(),
+                fileInode.groupId(),
+                bytes.length,
+                indexBlockId,
+                fileInode.linkCount(),
+                fileInode.createdTimeMillis(),
+                now,
+                now
+        );
+
+        writeInode(updatedInode);
+        return updatedInode;
+    }
+
+    public synchronized void freeBlock(int blockId) throws IOException {
+        BinaryFormatValidator.requireBlockIndex("blockId", blockId, superBlock.totalBlocks());
+        if (blockId < superBlock.dataRegionStartBlock()) {
+            throw new IllegalArgumentException("cannot free metadata block: " + blockId);
+        }
+
+        FreeSpaceBitmap bitmap = readFreeSpaceBitmap();
+        if (bitmap.isFree(blockId)) {
+            throw new IllegalArgumentException("block is already free: " + blockId);
+        }
+
+        bitmap.markFree(blockId);
+        superBlock = superBlock.withBlockCounts(
+                superBlock.usedBlocks() - 1,
+                superBlock.freeBlocks() + 1
+        );
+
+        writeFreeSpaceBitmap(bitmap);
+        writeSuperBlock();
+        writeDataBlock(blockId, new byte[superBlock.blockSize()]);
+    }
+
     public List<DirectoryEntry> readDirectoryEntries(Inode directoryInode) throws IOException {
         if (directoryInode == null) {
             throw new IllegalArgumentException("directoryInode cannot be null");
