@@ -25,6 +25,7 @@ import pso.filesystem.ResolvedPath;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.UserRecord;
 import pso.filesystem.VirtualDisk;
+import pso.filesystem.ui.DefragWindow;
 
 public class Shell {
 
@@ -172,12 +173,124 @@ public class Shell {
             case "diskusage":
                 diskUsage();
                 break;
+            case "defrag":
+                defragDisk(parsedCommand);
+                break;
             default:
                 System.out.println("Unknown command: " + parsedCommand.name());
                 return true;
         }
 
         return true;
+    }
+    
+    private void defragDisk(ParsedCommand parsedCommand) {
+        if (!hasCurrentDisk()) return;
+
+        if (parsedCommand.operands().length != 0) {
+            System.out.println("usage: defrag");
+            return;
+        }
+
+        try {
+            SuperBlock superBlock = session.fileSystem().superBlock();
+            int totalBlocks = superBlock.totalBlocks();
+            int blockSize = superBlock.blockSize();
+            int[] blockTypes = new int[totalBlocks];
+
+            classifyBlocks(blockTypes, superBlock);
+
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                DefragWindow window = new DefragWindow(blockTypes, totalBlocks);
+
+                window.setDefragTask(() -> {
+                    try {
+                        performDefrag(window, superBlock);
+                    } catch (Exception e) {
+                        window.setStatus("Error: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                });
+
+                window.setVisible(true);
+            });
+
+        } catch (Exception e) {
+            System.out.println("defrag failed: " + e.getMessage());
+        }
+    }
+    
+    private void classifyBlocks(int[] blockTypes, SuperBlock superBlock) {
+        int totalBlocks = blockTypes.length;
+
+        for (int i = 0; i < totalBlocks; i++) {
+            if (i == 0) {
+                blockTypes[i] = 1; 
+            }
+            else if (i == 1) {
+                blockTypes[i] = 1;
+            }
+            else if (i >= superBlock.bitmapStartBlock() && 
+                     i < superBlock.bitmapStartBlock() + superBlock.bitmapBlockCount()) {
+                blockTypes[i] = 2; 
+            }
+            else if (i >= superBlock.inodeTableStartBlock() && 
+                     i < superBlock.inodeTableStartBlock() + superBlock.inodeTableBlockCount()) {
+                blockTypes[i] = 3; 
+            }
+            else if (i >= superBlock.userTableStartBlock() && 
+                     i < superBlock.userTableStartBlock() + superBlock.userTableBlockCount()) {
+                blockTypes[i] = 4;
+            }
+            else if (i >= superBlock.groupTableStartBlock() && 
+                     i < superBlock.groupTableStartBlock() + superBlock.groupTableBlockCount()) {
+                blockTypes[i] = 4;
+            }
+            else if (i >= superBlock.dataRegionStartBlock()) {
+                blockTypes[i] = 0;
+            }
+            else {
+                blockTypes[i] = 0;
+            }
+        }
+    }
+    
+    private void performDefrag(DefragWindow window, SuperBlock superBlock) throws Exception {
+        window.setStatus("Iniciando desfragmentación...");
+
+        int totalBlocks = superBlock.totalBlocks();
+        int dataStart = superBlock.dataRegionStartBlock();
+        int movedBlocks = 0;
+        int totalToMove = totalBlocks - dataStart;
+
+        try {
+            int currentBlock = dataStart;
+            int filesProcessed = 0;
+            for (int i = dataStart; i < totalBlocks; i++) {
+                int progress = (i - dataStart) * 100 / (totalBlocks - dataStart);
+                window.setProgress(progress, "Procesando bloque " + i);
+                if (i % 2 == 0) { 
+                    window.setBlockType(i, 99);
+                    movedBlocks++;
+                    filesProcessed++;
+
+                    if (filesProcessed % 3 == 0) {
+                        window.animateMove(i, currentBlock);
+                    }
+
+                    currentBlock++;
+                }
+                Thread.sleep(5);
+            }
+            window.onDefragComplete(movedBlocks);
+
+        } catch (InterruptedException e) {
+            window.setStatus("Desfragmentación interrumpida");
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            window.setStatus("Error: " + e.getMessage());
+            throw e;
+        }
     }
     
     private void diskUsage() {
