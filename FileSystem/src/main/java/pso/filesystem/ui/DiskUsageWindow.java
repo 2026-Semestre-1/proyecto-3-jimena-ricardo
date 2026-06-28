@@ -11,6 +11,7 @@ import pso.filesystem.SuperBlock;
 import javax.swing.*;
 import javax.swing.border.*;
 import java.awt.*;
+import pso.filesystem.FreeSpaceBitmap;
 /**
  *
  * @author jimen
@@ -153,13 +154,32 @@ public class DiskUsageWindow extends JFrame {
         blockInodes = new int[totalBlocks];
         blockOwners = new String[totalBlocks];
 
+        FreeSpaceBitmap bitmap = null;
+        try {
+            bitmap = fs.readFreeSpaceBitmap();
+        } catch (java.io.IOException e) {
+            System.err.println("No se pudo leer el bitmap: " + e.getMessage());
+        }
+
         blockTypes[0] = TYPE_META;
         blockTypes[1] = TYPE_META;
 
-        for (int i = sup.bitmapStartBlock();     i < sup.bitmapStartBlock()     + sup.bitmapBlockCount();     i++) blockTypes[i] = TYPE_BITMAP;
-        for (int i = sup.inodeTableStartBlock(); i < sup.inodeTableStartBlock() + sup.inodeTableBlockCount(); i++) blockTypes[i] = TYPE_INODE;
-        for (int i = sup.userTableStartBlock();  i < sup.userTableStartBlock()  + sup.userTableBlockCount();  i++) blockTypes[i] = TYPE_USERTABLE;
-        for (int i = sup.groupTableStartBlock(); i < sup.groupTableStartBlock() + sup.groupTableBlockCount(); i++) blockTypes[i] = TYPE_USERTABLE;
+        for (int i = sup.bitmapStartBlock(); i < sup.bitmapStartBlock() + sup.bitmapBlockCount(); i++)
+            blockTypes[i] = TYPE_BITMAP;
+        for (int i = sup.inodeTableStartBlock(); i < sup.inodeTableStartBlock() + sup.inodeTableBlockCount(); i++)
+            blockTypes[i] = TYPE_INODE;
+        for (int i = sup.userTableStartBlock(); i < sup.userTableStartBlock() + sup.userTableBlockCount(); i++)
+            blockTypes[i] = TYPE_USERTABLE;
+        for (int i = sup.groupTableStartBlock(); i < sup.groupTableStartBlock() + sup.groupTableBlockCount(); i++)
+            blockTypes[i] = TYPE_USERTABLE;
+
+        for (int i = sup.dataRegionStartBlock(); i < totalBlocks; i++) {
+            if (bitmap != null && bitmap.isUsed(i)) {
+                blockTypes[i] = TYPE_DATA;
+            } else {
+                blockTypes[i] = TYPE_FREE;
+            }
+        }
 
         nameLabel.setText(diskName);
         totalLabel.setText(formatBytes(totalBytes));
@@ -167,7 +187,6 @@ public class DiskUsageWindow extends JFrame {
         freeLabel.setText(formatBytes(totalBytes - usedBytes));
         usageBar.setRatio(totalBytes > 0 ? (double) usedBytes / totalBytes : 0);
     }
-
     private JPanel buildHeader() {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(PANEL_BG);

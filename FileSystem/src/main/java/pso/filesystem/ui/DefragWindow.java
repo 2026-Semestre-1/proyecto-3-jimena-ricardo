@@ -32,11 +32,9 @@ public class DefragWindow extends JFrame {
     private static final int BLOCK_GAP = 2;
     private static final int GRID_PAD  = 16;
 
-    // Estado del disco
     private int[] blockTypes;
     private int   totalBlocks;
 
-    // Estado de la animación
     private int  animFromBlock = -1;
     private int  animToBlock   = -1;
     private volatile boolean running = false;
@@ -49,7 +47,6 @@ public class DefragWindow extends JFrame {
     private final JButton    startButton;
     private final JButton    closeButton;
 
-    // Callback que ejecuta la desfragmentación real en el disco
     private Runnable defragTask;
 
     public DefragWindow(int[] initialBlockTypes, int totalBlocks) {
@@ -99,7 +96,6 @@ public class DefragWindow extends JFrame {
         this.defragTask = task;
     }
 
-    /** Llamar desde afuera para animar el movimiento de un bloque. */
     public void animateMove(int fromBlock, int toBlock) throws InterruptedException {
         animFromBlock = fromBlock;
         animToBlock   = toBlock;

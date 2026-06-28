@@ -225,35 +225,32 @@ public class Shell {
     }
     
     private void classifyBlocks(int[] blockTypes, SuperBlock superBlock) {
-        int totalBlocks = blockTypes.length;
+        FreeSpaceBitmap bitmap = null;
+        try {
+            bitmap = session.fileSystem().readFreeSpaceBitmap();
+        } catch (java.io.IOException e) {
+            System.out.println("warning: can't read the bitmap");
+        }
 
+        int totalBlocks = blockTypes.length;
         for (int i = 0; i < totalBlocks; i++) {
-            if (i == 0) {
-                blockTypes[i] = 1; 
-            }
-            else if (i == 1) {
+            if (i == 0 || i == 1) {
                 blockTypes[i] = 1;
-            }
-            else if (i >= superBlock.bitmapStartBlock() && 
-                     i < superBlock.bitmapStartBlock() + superBlock.bitmapBlockCount()) {
-                blockTypes[i] = 2; 
-            }
-            else if (i >= superBlock.inodeTableStartBlock() && 
-                     i < superBlock.inodeTableStartBlock() + superBlock.inodeTableBlockCount()) {
-                blockTypes[i] = 3; 
-            }
-            else if (i >= superBlock.userTableStartBlock() && 
-                     i < superBlock.userTableStartBlock() + superBlock.userTableBlockCount()) {
+            } else if (i >= superBlock.bitmapStartBlock() &&
+                       i < superBlock.bitmapStartBlock() + superBlock.bitmapBlockCount()) {
+                blockTypes[i] = 2;
+            } else if (i >= superBlock.inodeTableStartBlock() &&
+                       i < superBlock.inodeTableStartBlock() + superBlock.inodeTableBlockCount()) {
+                blockTypes[i] = 3;
+            } else if (i >= superBlock.userTableStartBlock() &&
+                       i < superBlock.userTableStartBlock() + superBlock.userTableBlockCount()) {
                 blockTypes[i] = 4;
-            }
-            else if (i >= superBlock.groupTableStartBlock() && 
-                     i < superBlock.groupTableStartBlock() + superBlock.groupTableBlockCount()) {
+            } else if (i >= superBlock.groupTableStartBlock() &&
+                       i < superBlock.groupTableStartBlock() + superBlock.groupTableBlockCount()) {
                 blockTypes[i] = 4;
-            }
-            else if (i >= superBlock.dataRegionStartBlock()) {
-                blockTypes[i] = 0;
-            }
-            else {
+            } else if (i >= superBlock.dataRegionStartBlock()) {
+                blockTypes[i] = (bitmap != null && bitmap.isUsed(i)) ? 7 : 0;
+            } else {
                 blockTypes[i] = 0;
             }
         }
