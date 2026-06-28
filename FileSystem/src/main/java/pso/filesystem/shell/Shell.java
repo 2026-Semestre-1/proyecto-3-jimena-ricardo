@@ -151,6 +151,7 @@ public class Shell {
                 touch(parsedCommand);
                 break;
             case "cat":
+                cat(parsedCommand);
                 break;
             case "less":
                 break;
@@ -592,6 +593,56 @@ public class Shell {
         } catch (IOException ex) {
             System.out.println("hexdump failed: " + ex.getMessage());
         }
+    }
+
+    private void cat(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: cat <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+
+        try {
+            PathResolver resolver = new PathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+
+            if (resolved.inode().type() != InodeType.FILE) {
+                System.out.println("cat failed: not a file");
+                return;
+            }
+
+            byte[] bytes = session.fileSystem().readFileBytes(resolved.inode());
+            System.out.print(asciiText(bytes));
+
+            if (bytes.length > 0 && bytes[bytes.length - 1] != '\n') {
+                System.out.println();
+            }
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("cat failed: " + ex.getMessage());
+        }
+    }
+
+    private String asciiText(byte[] bytes) {
+        StringBuilder text = new StringBuilder(bytes.length);
+
+        for (byte raw : bytes) {
+            int value = raw & 0xFF;
+            if (value == '\n' || value == '\r' || value == '\t') {
+                text.append((char) value);
+            } else if (value >= 32 && value <= 126) {
+                text.append((char) value);
+            } else {
+                text.append('?');
+            }
+        }
+
+        return text.toString();
     }
 
     private void note(ParsedCommand parsedCommand) {
