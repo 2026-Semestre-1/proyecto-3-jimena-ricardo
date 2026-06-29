@@ -1573,8 +1573,10 @@ public class Shell {
             }
 
             byte[] initialContent = fileSystem.readFileBytes(fileInode);
-            byte[] editedContent = new NoteEditor(absolutePath).edit(initialContent);
-            fileSystem.writeFileBytes(fileInode, editedContent);
+            NoteEditor.EditResult result = new NoteEditor(absolutePath).edit(initialContent);
+            if (result.save()) {
+                fileSystem.writeFileBytes(fileInode, result.content());
+            }
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("note failed: " + ex.getMessage());
         }

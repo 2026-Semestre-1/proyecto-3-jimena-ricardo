@@ -34,7 +34,7 @@ public final class NoteEditor {
         this.filePath = filePath;
     }
 
-    public byte[] edit(byte[] initialContent) throws IOException {
+    public EditResult edit(byte[] initialContent) throws IOException {
         loadAscii(initialContent);
 
         try (TerminalRawMode ignored = TerminalRawMode.enter()) {
@@ -45,13 +45,15 @@ public final class NoteEditor {
 
             try {
                 TerminalSize terminalSize = TerminalSize.detect();
-                boolean running = true;
-                while (running) {
+                while (true) {
                     render(out, terminalSize);
 
                     int key = System.in.read();
                     if (key == CTRL_X) {
-                        running = false;
+                        Boolean save = askSave(out, terminalSize);
+                        if (save != null) {
+                            return new EditResult(save, toAsciiBytes());
+                        }
                     } else {
                         handleKey(key);
                     }
@@ -62,8 +64,9 @@ public final class NoteEditor {
                 out.flush();
             }
         }
+    }
 
-        return toAsciiBytes();
+    public record EditResult(boolean save, byte[] content) {
     }
 
     private void loadAscii(byte[] bytes) {
@@ -90,6 +93,28 @@ public final class NoteEditor {
                 lines.get(lines.size() - 1).append((char) value);
             } else {
                 lines.get(lines.size() - 1).append('?');
+            }
+        }
+    }
+
+    private Boolean askSave(PrintStream out, TerminalSize terminalSize) throws IOException {
+        int promptRow = terminalSize.rows();
+
+        out.printf("\033[%d;1H", promptRow);
+        out.print(CLEAR_TO_END_OF_LINE);
+        out.print("Save changes? y/n: ");
+        out.flush();
+
+        while (true) {
+            int key = System.in.read();
+            if (key == 'y' || key == 'Y') {
+                return true;
+            }
+            if (key == 'n' || key == 'N') {
+                return false;
+            }
+            if (key == ESC) {
+                return null;
             }
         }
     }
