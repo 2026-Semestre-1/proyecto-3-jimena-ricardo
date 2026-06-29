@@ -127,6 +127,46 @@ public final class FileSystem {
         }
     }
 
+    public synchronized void clearInode(int inodeId) throws IOException {
+        BinaryFormatValidator.requirePositive("inodeId", inodeId);
+
+        int inodesPerBlock = superBlock.blockSize() / Inode.BINARY_SIZE;
+        int blockOffset = (inodeId - 1) / inodesPerBlock;
+        int slotInBlock = (inodeId - 1) % inodesPerBlock;
+
+        if (blockOffset >= superBlock.inodeTableBlockCount()) {
+            throw new IllegalArgumentException("inode id out of range: " + inodeId);
+        }
+
+        int blockNumber = superBlock.inodeTableStartBlock() + blockOffset;
+        Inode unusedInode = new Inode(
+                Inode.UNUSED_INODE_ID,
+                InodeType.UNUSED,
+                0,
+                0,
+                0,
+                0,
+                Inode.NO_INDEX_BLOCK,
+                0,
+                0,
+                0,
+                0
+        );
+
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            byte[] block = disk.readBlock(blockNumber);
+            byte[] inodeBytes = unusedInode.toBytes();
+            System.arraycopy(
+                    inodeBytes,
+                    0,
+                    block,
+                    slotInBlock * Inode.BINARY_SIZE,
+                    Inode.BINARY_SIZE
+            );
+            disk.writeBlock(blockNumber, block);
+        }
+    }
+
     public void writeIndexBlock(int blockId, IndexBlock indexBlock) throws IOException {
         if (indexBlock == null) {
             throw new IllegalArgumentException("indexBlock cannot be null");

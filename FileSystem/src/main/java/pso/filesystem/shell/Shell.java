@@ -50,6 +50,16 @@ public class Shell {
             .ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
 
+    public void mountDisk(String diskName) throws IOException {
+        if (diskName == null || diskName.isBlank()) {
+            throw new IllegalArgumentException("disk name cannot be blank");
+        }
+
+        FileSystem fileSystem = FileSystem.mount(diskName);
+        sessionManager = new SessionManager(fileSystem);
+        session = sessionManager.createRootSession();
+    }
+
     public void start() {
         Scanner sc = new Scanner(System.in);
         boolean running = true;
@@ -249,6 +259,11 @@ public class Shell {
             PathResolver resolver = new PathResolver(fs);
 
             ResolvedPath src = resolver.resolve(srcInput, session.currentDirectoryInodeId());
+            if (normalizePath(session.currentPath(), srcInput).equals("/")) {
+                System.out.println("mv failed: cannot move root directory");
+                return;
+            }
+
             String srcName       = fileNameFromInputPath(srcInput);
             String srcParentPath = parentPathFromInputPath(srcInput);
             ResolvedPath srcParent = resolver.resolve(srcParentPath, session.currentDirectoryInodeId());
@@ -305,14 +320,66 @@ public class Shell {
 
                 if (src.inode().type() == InodeType.DIRECTORY) {
                     updateParentLink(fs, src.inode(), dstParent.inodeId());
+                    incrementDirectoryLinkCount(dstParent.inodeId());
+                    decrementDirectoryLinkCount(srcParent.inodeId());
                 }
 
-                System.out.println("moved: " + srcInput + " → " + dstInput + "/" + newName);
+                String destinationPath = joinAbsolutePath(
+                        normalizePath(session.currentPath(), dstParentInput),
+                        newName
+                );
+                System.out.println("moved: " + srcInput + " → " + destinationPath);
             }
 
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("mv failed: " + ex.getMessage());
         }
+    }
+
+    private String joinAbsolutePath(String parentPath, String childName) {
+        if (parentPath.equals("/")) {
+            return "/" + childName;
+        }
+
+        return parentPath + "/" + childName;
+    }
+
+    private void incrementDirectoryLinkCount(int inodeId) throws IOException {
+        adjustDirectoryLinkCount(inodeId, 1);
+    }
+
+    private void decrementDirectoryLinkCount(int inodeId) throws IOException {
+        adjustDirectoryLinkCount(inodeId, -1);
+    }
+
+    private void adjustDirectoryLinkCount(int inodeId, int delta) throws IOException {
+        FileSystem fs = session.fileSystem();
+        Inode inode = fs.readInode(inodeId);
+
+        if (inode.type() != InodeType.DIRECTORY) {
+            throw new IllegalArgumentException("inode is not a directory: " + inodeId);
+        }
+
+        int newLinkCount = inode.linkCount() + delta;
+        if (newLinkCount < 2) {
+            throw new IllegalStateException("directory link count cannot be less than 2");
+        }
+
+        Inode updated = new Inode(
+                inode.inodeId(),
+                inode.type(),
+                inode.permissions(),
+                inode.ownerUserId(),
+                inode.groupId(),
+                inode.sizeBytes(),
+                inode.indexBlockId(),
+                newLinkCount,
+                inode.createdTimeMillis(),
+                System.currentTimeMillis(),
+                inode.accessedTimeMillis()
+        );
+
+        fs.writeInode(updated);
     }
 
     private void updateParentLink(FileSystem fs, Inode dirInode, int newParentInodeId) throws IOException {
@@ -424,6 +491,10 @@ public class Shell {
             }
  
             removeDirectoryEntry(parent.inode(), entryName);
+            if (target.inode().type() == InodeType.DIRECTORY) {
+                decrementDirectoryLinkCount(parent.inodeId());
+            }
+
             System.out.println("removed: " + inputPath);
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("rm failed: " + ex.getMessage());
@@ -447,17 +518,16 @@ public class Shell {
     
     private void freeInodeBlocks(Inode inode) throws IOException {
         FileSystem fs = session.fileSystem();
-        FreeSpaceBitmap bitmap = fs.readFreeSpaceBitmap();
- 
+
         if (inode.indexBlockId() != Inode.NO_INDEX_BLOCK) {
             IndexBlock indexBlock = fs.readIndexBlock(inode.indexBlockId());
             for (int dataBlock : indexBlock.blockPointers()) {
-                bitmap.markFree(dataBlock);
+                fs.freeBlock(dataBlock);
             }
-            bitmap.markFree(inode.indexBlockId());
+            fs.freeBlock(inode.indexBlockId());
         }
- 
-        fs.writeFreeSpaceBitmap(bitmap);
+
+        fs.clearInode(inode.inodeId());
     }
  
     
