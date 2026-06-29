@@ -3,6 +3,7 @@ package pso.filesystem.shell;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -20,7 +21,8 @@ import pso.filesystem.GroupRecord;
 import pso.filesystem.IndexBlock;
 import pso.filesystem.Inode;
 import pso.filesystem.InodeType;
-import pso.filesystem.PathResolver;
+import pso.filesystem.PermissionAwarePathResolver;
+import pso.filesystem.PermissionManager;
 import pso.filesystem.ResolvedPath;
 import pso.filesystem.SuperBlock;
 import pso.filesystem.UserRecord;
@@ -32,6 +34,7 @@ public class Shell {
 
     private Session session;
     private SessionManager sessionManager;
+    private final Scanner scanner = new Scanner(System.in);
     
     private static final int SUPER_BLOCK_INDEX = 1;
     private static final int BITMAP_START_BLOCK = 2;
@@ -61,11 +64,10 @@ public class Shell {
     }
 
     public void start() {
-        Scanner sc = new Scanner(System.in);
         boolean running = true;
         while (running) {
             System.out.print(prompt());
-            String command = sc.nextLine();
+            String command = scanner.nextLine();
             ParsedCommand parsedCommand = parse(command);
             running = dispatch(parsedCommand);
         }
@@ -78,11 +80,11 @@ public class Shell {
     }
 
     private String currentUserName() {
-        if (session.currentUserId() == 0) {
-            return "root";
+        try {
+            return session.fileSystem().readUserRecord(session.currentUserId()).username();
+        } catch (IOException | IllegalArgumentException ex) {
+            return "user" + session.currentUserId();
         }
-
-        return "user" + session.currentUserId();
     }
 
     private String diskNameWithoutExtension(String diskName) {
@@ -125,12 +127,16 @@ public class Shell {
                 System.out.println("bye");
                 return false;
             case "useradd":
+                useradd(parsedCommand);
                 break;
             case "groupadd":
+                groupadd(parsedCommand);
                 break;
             case "passwd":
+                passwd(parsedCommand);
                 break;
             case "su":
+                su(parsedCommand);
                 break;
             case "whoami":
                 whoami(parsedCommand);
@@ -160,6 +166,7 @@ public class Shell {
                 whereis(parsedCommand);
                 break;
             case "ln":
+                ln(parsedCommand);
                 break;
             case "touch":
                 touch(parsedCommand);
@@ -168,15 +175,19 @@ public class Shell {
                 cat(parsedCommand);
                 break;
             case "less":
+                less(parsedCommand);
                 break;
             case "note":
                 note(parsedCommand);
                 break;
             case "chown":
+                chown(parsedCommand);
                 break;
             case "chgrp":
+                chgrp(parsedCommand);
                 break;
             case "chmod":
+                chmod(parsedCommand);
                 break;
             case "viewFilesOpen":
                 break;
@@ -203,6 +214,317 @@ public class Shell {
         return true;
     }
     
+    private void groupadd(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: groupadd <groupname>");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+        if (!session.isRoot()) {
+            System.out.println("groupadd failed: permission denied");
+            return;
+        }
+
+        String groupName = operands[0];
+        try {
+            session.fileSystem().findGroupByName(groupName);
+            System.out.println("groupadd failed: group already exists: " + groupName);
+            return;
+        } catch (IOException ex) {
+            System.out.println("groupadd failed: " + ex.getMessage());
+            return;
+        } catch (IllegalArgumentException ex) {
+            // Group does not exist; create it below.
+        }
+
+        try {
+            int groupId = session.fileSystem().allocateGroupId();
+            session.fileSystem().writeGroupRecord(new GroupRecord(true, groupId, groupName, new int[0]));
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("groupadd failed: " + ex.getMessage());
+        }
+    }
+
+    private void useradd(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: useradd <username>");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+        if (!session.isRoot()) {
+            System.out.println("useradd failed: permission denied");
+            return;
+        }
+
+        String username = operands[0];
+        if (username.length() > GroupRecord.GROUP_NAME_SIZE) {
+            System.out.println("useradd failed: username is too long for private group name");
+            return;
+        }
+
+        try {
+            session.fileSystem().findUserByUsername(username);
+            System.out.println("useradd failed: user already exists: " + username);
+            return;
+        } catch (IOException ex) {
+            System.out.println("useradd failed: " + ex.getMessage());
+            return;
+        } catch (IllegalArgumentException ex) {
+            // User does not exist; create it below.
+        }
+
+        try {
+            session.fileSystem().findGroupByName(username);
+            System.out.println("useradd failed: private group already exists: " + username);
+            return;
+        } catch (IOException ex) {
+            System.out.println("useradd failed: " + ex.getMessage());
+            return;
+        } catch (IllegalArgumentException ex) {
+            // Private group does not exist; create it below.
+        }
+
+        System.out.print("Full name: ");
+        String fullName = scanner.nextLine();
+        System.out.print("Password: ");
+        String password = scanner.nextLine();
+        System.out.print("Confirm password: ");
+        String confirmPassword = scanner.nextLine();
+
+        if (!password.equals(confirmPassword)) {
+            System.out.println("useradd failed: passwords do not match");
+            return;
+        }
+
+        try {
+            FileSystem fileSystem = session.fileSystem();
+            int userId = fileSystem.allocateUserId();
+            int groupId = fileSystem.allocateGroupId();
+            Inode homeDirectory = createUserHomeDirectory(username, userId, groupId);
+
+            fileSystem.writeGroupRecord(new GroupRecord(true, groupId, username, new int[] { userId }));
+            fileSystem.writeUserRecord(new UserRecord(
+                    true,
+                    userId,
+                    username,
+                    fullName,
+                    groupId,
+                    homeDirectory.inodeId(),
+                    password
+            ));
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("useradd failed: " + ex.getMessage());
+        }
+    }
+
+    private Inode createUserHomeDirectory(String username, int userId, int groupId) throws IOException {
+        FileSystem fileSystem = session.fileSystem();
+        PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fileSystem);
+        PermissionManager permissionManager = new PermissionManager(fileSystem);
+        ResolvedPath homeParent = resolver.resolve("/home", session);
+        permissionManager.requireWriteAndExecute(session, homeParent.inode());
+
+        for (DirectoryEntry entry : fileSystem.readDirectoryEntries(homeParent.inode())) {
+            if (entry.name().equals(username)) {
+                throw new IllegalArgumentException("home directory already exists: " + username);
+            }
+        }
+
+        int newInodeId = fileSystem.allocateInodeId();
+        int indexBlockId = fileSystem.allocateBlock();
+        int dataBlockId = fileSystem.allocateBlock();
+        writeInitialDirectoryBlock(fileSystem, dataBlockId, newInodeId, homeParent.inodeId());
+        fileSystem.writeIndexBlock(indexBlockId, new IndexBlock(List.of(dataBlockId)));
+
+        long now = System.currentTimeMillis();
+        Inode homeDirectory = new Inode(
+                newInodeId,
+                InodeType.DIRECTORY,
+                DEFAULT_DIRECTORY_PERMISSIONS,
+                userId,
+                groupId,
+                2L * DirectoryEntry.BINARY_SIZE,
+                indexBlockId,
+                2,
+                now,
+                now,
+                now
+        );
+        fileSystem.writeInode(homeDirectory);
+
+        Inode updatedParent = fileSystem.appendDirectoryEntry(
+                homeParent.inode(),
+                new DirectoryEntry(newInodeId, InodeType.DIRECTORY, username)
+        );
+        fileSystem.writeInode(new Inode(
+                updatedParent.inodeId(),
+                updatedParent.type(),
+                updatedParent.permissions(),
+                updatedParent.ownerUserId(),
+                updatedParent.groupId(),
+                updatedParent.sizeBytes(),
+                updatedParent.indexBlockId(),
+                updatedParent.linkCount() + 1,
+                updatedParent.createdTimeMillis(),
+                updatedParent.modifiedTimeMillis(),
+                updatedParent.accessedTimeMillis()
+        ));
+
+        return homeDirectory;
+    }
+
+    private void passwd(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: passwd <username>");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String username = operands[0];
+        try {
+            UserRecord user = session.fileSystem().findUserByUsername(username);
+            if (!session.isRoot() && user.userId() != session.currentUserId()) {
+                System.out.println("passwd failed: permission denied");
+                return;
+            }
+
+            System.out.print("Password: ");
+            String password = scanner.nextLine();
+            System.out.print("Confirm password: ");
+            String confirmPassword = scanner.nextLine();
+            if (!password.equals(confirmPassword)) {
+                System.out.println("passwd failed: passwords do not match");
+                return;
+            }
+
+            session.fileSystem().writeUserRecord(new UserRecord(
+                    true,
+                    user.userId(),
+                    user.username(),
+                    user.fullName(),
+                    user.primaryGroupId(),
+                    user.homeDirectoryInodeId(),
+                    password
+            ));
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("passwd failed: " + ex.getMessage());
+        }
+    }
+
+    private void su(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length > 1) {
+            System.out.println("usage: su [username]");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String username = operands.length == 0 ? "root" : operands[0];
+        try {
+            UserRecord user = session.fileSystem().findUserByUsername(username);
+            System.out.print("Password: ");
+            String password = scanner.nextLine();
+            if (!user.password().equals(password)) {
+                System.out.println("su failed: permission denied");
+                return;
+            }
+
+            session.setCurrentUserId(user.userId());
+            session.setCurrentDirectoryInodeId(user.homeDirectoryInodeId());
+            session.setCurrentPath(homePathForUser(user));
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("su failed: " + ex.getMessage());
+        }
+    }
+
+    private String homePathForUser(UserRecord user) {
+        if (user.userId() == ROOT_USER_ID) {
+            return "/root";
+        }
+        return "/home/" + user.username();
+    }
+
+    private void ln(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 2) {
+            System.out.println("usage: ln <target> <linkname>");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String targetInput = operands[0];
+        String linkInput = operands[1];
+        String linkPath = removeTrailingSlashes(linkInput);
+        String linkName = fileNameFromInputPath(linkPath);
+        if (linkName.equals("/") || linkName.equals(".") || linkName.equals("..")) {
+            System.out.println("ln failed: invalid link name");
+            return;
+        }
+
+        try {
+            FileSystem fileSystem = session.fileSystem();
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fileSystem);
+            PermissionManager permissionManager = new PermissionManager(fileSystem);
+            resolver.resolve(targetInput, session);
+
+            String parentPath = parentPathFromInputPath(linkPath);
+            ResolvedPath parent = resolver.resolve(parentPath, session);
+            if (parent.inode().type() != InodeType.DIRECTORY) {
+                System.out.println("ln failed: parent is not a directory");
+                return;
+            }
+            permissionManager.requireWriteAndExecute(session, parent.inode());
+
+            for (DirectoryEntry entry : fileSystem.readDirectoryEntries(parent.inode())) {
+                if (entry.name().equals(linkName)) {
+                    System.out.println("ln failed: directory entry already exists: " + linkName);
+                    return;
+                }
+            }
+
+            String targetPath = normalizePath(session.currentPath(), targetInput);
+            int symlinkInodeId = fileSystem.allocateInodeId();
+            long now = System.currentTimeMillis();
+            Inode symlinkInode = new Inode(
+                    symlinkInodeId,
+                    InodeType.SYMLINK,
+                    DEFAULT_DIRECTORY_PERMISSIONS,
+                    session.currentUserId(),
+                    parent.inode().groupId(),
+                    0,
+                    Inode.NO_INDEX_BLOCK,
+                    1,
+                    now,
+                    now,
+                    now
+            );
+            fileSystem.writeInode(symlinkInode);
+            Inode writtenSymlink = fileSystem.writeFileBytes(
+                    symlinkInode,
+                    targetPath.getBytes(StandardCharsets.US_ASCII)
+            );
+            fileSystem.appendDirectoryEntry(
+                    parent.inode(),
+                    new DirectoryEntry(writtenSymlink.inodeId(), InodeType.SYMLINK, linkName)
+            );
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("ln failed: " + ex.getMessage());
+        }
+    }
+
     private void whereis(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -256,9 +578,10 @@ public class Shell {
 
         try {
             FileSystem fs = session.fileSystem();
-            PathResolver resolver = new PathResolver(fs);
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fs);
+            PermissionManager permissionManager = new PermissionManager(fs);
 
-            ResolvedPath src = resolver.resolve(srcInput, session.currentDirectoryInodeId());
+            ResolvedPath src = resolver.resolve(srcInput, session, false);
             if (normalizePath(session.currentPath(), srcInput).equals("/")) {
                 System.out.println("mv failed: cannot move root directory");
                 return;
@@ -266,13 +589,13 @@ public class Shell {
 
             String srcName       = fileNameFromInputPath(srcInput);
             String srcParentPath = parentPathFromInputPath(srcInput);
-            ResolvedPath srcParent = resolver.resolve(srcParentPath, session.currentDirectoryInodeId());
+            ResolvedPath srcParent = resolver.resolve(srcParentPath, session);
 
             String dstParentInput;
             String newName;
 
             try {
-                ResolvedPath dstResolved = resolver.resolve(dstInput, session.currentDirectoryInodeId());
+                ResolvedPath dstResolved = resolver.resolve(dstInput, session);
                 if (dstResolved.inode().type() == InodeType.DIRECTORY) {
                     dstParentInput = dstInput;
                     newName        = srcName;
@@ -281,16 +604,22 @@ public class Shell {
                     newName        = fileNameFromInputPath(dstInput);
                 }
             } catch (IllegalArgumentException e) {
+                if (isPermissionDenied(e)) {
+                    throw e;
+                }
                 dstParentInput = parentPathFromInputPath(dstInput);
                 newName        = fileNameFromInputPath(dstInput);
             }
 
-            ResolvedPath dstParent = resolver.resolve(dstParentInput, session.currentDirectoryInodeId());
+            ResolvedPath dstParent = resolver.resolve(dstParentInput, session);
 
             if (dstParent.inode().type() != InodeType.DIRECTORY) {
                 System.out.println("mv failed: destination parent is not a directory");
                 return;
             }
+
+            permissionManager.requireWriteAndExecute(session, srcParent.inode());
+            permissionManager.requireWriteAndExecute(session, dstParent.inode());
 
             for (DirectoryEntry entry : fs.readDirectoryEntries(dstParent.inode())) {
                 if (entry.name().equals(newName)) {
@@ -472,8 +801,10 @@ public class Shell {
         }
  
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath target = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+            FileSystem fs = session.fileSystem();
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fs);
+            PermissionManager permissionManager = new PermissionManager(fs);
+            ResolvedPath target = resolver.resolve(inputPath, session, false);
  
             if (target.inode().type() == InodeType.DIRECTORY && !recursive) {
                 System.out.println("rm failed: " + inputPath + " is a directory (use -R to remove recursively)");
@@ -481,11 +812,12 @@ public class Shell {
             }
  
             String parentPath = parentPathFromInputPath(inputPath);
-            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            ResolvedPath parent = resolver.resolve(parentPath, session);
+            permissionManager.requireWriteAndExecute(session, parent.inode());
             String entryName = fileNameFromInputPath(inputPath);
  
             if (target.inode().type() == InodeType.DIRECTORY && recursive) {
-                removeDirectoryRecursive(target, resolver);
+                removeDirectoryRecursive(target, permissionManager);
             } else {
                 freeInodeBlocks(target.inode());
             }
@@ -501,14 +833,15 @@ public class Shell {
         }
     }
     
-    private void removeDirectoryRecursive(ResolvedPath dir, PathResolver resolver) throws IOException {
+    private void removeDirectoryRecursive(ResolvedPath dir, PermissionManager permissionManager) throws IOException {
         FileSystem fs = session.fileSystem();
+        permissionManager.requireWriteAndExecute(session, dir.inode());
         List<DirectoryEntry> entries = fs.readDirectoryEntries(dir.inode());
         for (DirectoryEntry entry : entries) {
             if (entry.name().equals(".") || entry.name().equals("..")) continue;
             Inode childInode = fs.readInode(entry.inodeId());
             if (childInode.type() == InodeType.DIRECTORY) {
-                removeDirectoryRecursive(new ResolvedPath(entry.inodeId(), childInode), resolver);
+                removeDirectoryRecursive(new ResolvedPath(entry.inodeId(), childInode), permissionManager);
             } else {
                 freeInodeBlocks(childInode);
             }
@@ -944,6 +1277,214 @@ public class Shell {
         }
     }
 
+    private void chown(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 2) {
+            System.out.println("usage: chown [-R] <username> <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        if (!session.isRoot()) {
+            System.out.println("chown failed: permission denied");
+            return;
+        }
+
+        boolean recursive = hasOption(parsedCommand, "-R") || hasOption(parsedCommand, "-r");
+        String username = operands[0];
+        String path = operands[1];
+
+        try {
+            FileSystem fileSystem = session.fileSystem();
+            UserRecord newOwner = fileSystem.findUserByUsername(username);
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fileSystem);
+            ResolvedPath resolved = resolver.resolve(path, session, false);
+
+            changeOwner(resolved.inode(), newOwner.userId(), recursive);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("chown failed: " + ex.getMessage());
+        }
+    }
+
+    private void chgrp(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 2) {
+            System.out.println("usage: chgrp [-R] <groupname> <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        if (!session.isRoot()) {
+            System.out.println("chgrp failed: permission denied");
+            return;
+        }
+
+        boolean recursive = hasOption(parsedCommand, "-R") || hasOption(parsedCommand, "-r");
+        String groupName = operands[0];
+        String path = operands[1];
+
+        try {
+            FileSystem fileSystem = session.fileSystem();
+            GroupRecord newGroup = fileSystem.findGroupByName(groupName);
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fileSystem);
+            ResolvedPath resolved = resolver.resolve(path, session, false);
+
+            changeGroup(resolved.inode(), newGroup.groupId(), recursive);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("chgrp failed: " + ex.getMessage());
+        }
+    }
+
+    private void changeOwner(Inode inode, int newOwnerUserId, boolean recursive) throws IOException {
+        writeInodeOwnership(inode, newOwnerUserId, inode.groupId());
+        if (recursive && inode.type() == InodeType.DIRECTORY) {
+            for (DirectoryEntry entry : session.fileSystem().readDirectoryEntries(inode)) {
+                if (entry.name().equals(".") || entry.name().equals("..")) {
+                    continue;
+                }
+
+                Inode child = session.fileSystem().readInode(entry.inodeId());
+                changeOwner(child, newOwnerUserId, true);
+            }
+        }
+    }
+
+    private void changeGroup(Inode inode, int newGroupId, boolean recursive) throws IOException {
+        writeInodeOwnership(inode, inode.ownerUserId(), newGroupId);
+        if (recursive && inode.type() == InodeType.DIRECTORY) {
+            for (DirectoryEntry entry : session.fileSystem().readDirectoryEntries(inode)) {
+                if (entry.name().equals(".") || entry.name().equals("..")) {
+                    continue;
+                }
+
+                Inode child = session.fileSystem().readInode(entry.inodeId());
+                changeGroup(child, newGroupId, true);
+            }
+        }
+    }
+
+    private void writeInodeOwnership(Inode inode, int ownerUserId, int groupId) throws IOException {
+        long now = System.currentTimeMillis();
+        Inode updatedInode = new Inode(
+                inode.inodeId(),
+                inode.type(),
+                inode.permissions(),
+                ownerUserId,
+                groupId,
+                inode.sizeBytes(),
+                inode.indexBlockId(),
+                inode.linkCount(),
+                inode.createdTimeMillis(),
+                now,
+                inode.accessedTimeMillis()
+        );
+
+        session.fileSystem().writeInode(updatedInode);
+    }
+
+    private void chmod(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 2) {
+            System.out.println("usage: chmod <mode> <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        try {
+            int permissions = parsePermissions(operands[0]);
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(operands[1], session, false);
+            Inode inode = resolved.inode();
+
+            if (!session.isRoot() && inode.ownerUserId() != session.currentUserId()) {
+                throw new IllegalArgumentException("permission denied");
+            }
+
+            long now = System.currentTimeMillis();
+            Inode updatedInode = new Inode(
+                    inode.inodeId(),
+                    inode.type(),
+                    permissions,
+                    inode.ownerUserId(),
+                    inode.groupId(),
+                    inode.sizeBytes(),
+                    inode.indexBlockId(),
+                    inode.linkCount(),
+                    inode.createdTimeMillis(),
+                    now,
+                    inode.accessedTimeMillis()
+            );
+
+            session.fileSystem().writeInode(updatedInode);
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("chmod failed: " + ex.getMessage());
+        }
+    }
+
+    private int parsePermissions(String mode) {
+        if (mode == null || mode.length() != 2) {
+            throw new IllegalArgumentException("mode must have exactly two digits");
+        }
+
+        int owner = parsePermissionDigit(mode.charAt(0));
+        int group = parsePermissionDigit(mode.charAt(1));
+        return (owner << 4) | group;
+    }
+
+    private int parsePermissionDigit(char digit) {
+        if (digit < '0' || digit > '7') {
+            throw new IllegalArgumentException("permission digits must be from 0 to 7");
+        }
+        return digit - '0';
+    }
+
+    private void less(ParsedCommand parsedCommand) {
+        String[] operands = parsedCommand.operands();
+        if (operands.length != 1) {
+            System.out.println("usage: less <path>");
+            return;
+        }
+
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        String inputPath = operands[0];
+
+        try {
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(inputPath, session);
+
+            if (resolved.inode().type() != InodeType.FILE) {
+                System.out.println("less failed: not a file");
+                return;
+            }
+
+            permissionManager.requireRead(session, resolved.inode());
+            byte[] bytes = session.fileSystem().readFileBytes(resolved.inode());
+            System.out.print(asciiText(bytes));
+            if (bytes.length > 0 && bytes[bytes.length - 1] != '\n') {
+                System.out.println();
+            }
+            System.out.print("press q then ENTER to quit: ");
+            while (!scanner.nextLine().equals("q")) {
+                System.out.print("press q then ENTER to quit: ");
+            }
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("less failed: " + ex.getMessage());
+        }
+    }
+
     private void cat(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -958,14 +1499,16 @@ public class Shell {
         String inputPath = operands[0];
 
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(inputPath, session);
 
             if (resolved.inode().type() != InodeType.FILE) {
                 System.out.println("cat failed: not a file");
                 return;
             }
 
+            permissionManager.requireRead(session, resolved.inode());
             byte[] bytes = session.fileSystem().readFileBytes(resolved.inode());
             System.out.print(asciiText(bytes));
 
@@ -1009,19 +1552,24 @@ public class Shell {
 
         try {
             FileSystem fileSystem = session.fileSystem();
-            PathResolver resolver = new PathResolver(fileSystem);
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(fileSystem);
+            PermissionManager permissionManager = new PermissionManager(fileSystem);
             String absolutePath = normalizePath(session.currentPath(), inputPath);
             Inode fileInode;
 
             try {
-                ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+                ResolvedPath resolved = resolver.resolve(inputPath, session);
                 if (resolved.inode().type() != InodeType.FILE) {
                     System.out.println("note failed: not a file");
                     return;
                 }
+                permissionManager.requireReadAndWrite(session, resolved.inode());
                 fileInode = resolved.inode();
             } catch (IllegalArgumentException ex) {
-                fileInode = createEmptyFileForNote(absolutePath, resolver);
+                if (!isDirectoryEntryNotFound(ex)) {
+                    throw ex;
+                }
+                fileInode = createEmptyFileForNote(absolutePath, resolver, permissionManager);
             }
 
             byte[] initialContent = fileSystem.readFileBytes(fileInode);
@@ -1032,7 +1580,11 @@ public class Shell {
         }
     }
 
-    private Inode createEmptyFileForNote(String absolutePath, PathResolver resolver) throws IOException {
+    private Inode createEmptyFileForNote(
+            String absolutePath,
+            PermissionAwarePathResolver resolver,
+            PermissionManager permissionManager
+    ) throws IOException {
         if (absolutePath.equals("/")) {
             throw new IllegalArgumentException("invalid file name");
         }
@@ -1043,10 +1595,11 @@ public class Shell {
         }
 
         String parentPath = parentPathFromAbsolutePath(absolutePath);
-        ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+        ResolvedPath parent = resolver.resolve(parentPath, session);
         if (parent.inode().type() != InodeType.DIRECTORY) {
             throw new IllegalArgumentException("parent is not a directory");
         }
+        permissionManager.requireWriteAndExecute(session, parent.inode());
 
         FileSystem fileSystem = session.fileSystem();
         int newInodeId = fileSystem.allocateInodeId();
@@ -1088,13 +1641,18 @@ public class Shell {
         String inputPath = operands[0];
 
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
 
             try {
-                ResolvedPath existing = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+                ResolvedPath existing = resolver.resolve(inputPath, session);
+                permissionManager.requireWrite(session, existing.inode());
                 updateInodeTimestamps(existing.inode());
                 return;
             } catch (IllegalArgumentException ex) {
+                if (!isDirectoryEntryNotFound(ex)) {
+                    throw ex;
+                }
                 // The path does not currently resolve; try to create a new empty file below.
             }
 
@@ -1106,11 +1664,12 @@ public class Shell {
             }
 
             String parentPath = parentPathFromInputPath(cleanedPath);
-            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            ResolvedPath parent = resolver.resolve(parentPath, session);
             if (parent.inode().type() != InodeType.DIRECTORY) {
                 System.out.println("touch failed: parent is not a directory");
                 return;
             }
+            permissionManager.requireWriteAndExecute(session, parent.inode());
 
             FileSystem fileSystem = session.fileSystem();
             int newInodeId = fileSystem.allocateInodeId();
@@ -1185,12 +1744,14 @@ public class Shell {
         String parentPath = parentPathFromAbsolutePath(absolutePath);
 
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath parent = resolver.resolve(parentPath, session.currentDirectoryInodeId());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
+            ResolvedPath parent = resolver.resolve(parentPath, session);
             if (parent.inode().type() != InodeType.DIRECTORY) {
                 System.out.println("mkdir failed: parent is not a directory");
                 return;
             }
+            permissionManager.requireWriteAndExecute(session, parent.inode());
 
             FileSystem fileSystem = session.fileSystem();
             for (DirectoryEntry entry : fileSystem.readDirectoryEntries(parent.inode())) {
@@ -1277,8 +1838,8 @@ public class Shell {
 
         String inputPath = operands[0];
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath resolved = resolver.resolve(inputPath, session.currentDirectoryInodeId());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(inputPath, session, false);
             String absolutePath = normalizePath(session.currentPath(), inputPath);
             String fileName = fileNameFromPath(absolutePath);
             printInode(fileName, absolutePath, resolved.inode());
@@ -1388,14 +1949,16 @@ public class Shell {
         String path = operands.length == 0 ? "." : operands[0];
 
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath resolved = resolver.resolve(path, session.currentDirectoryInodeId());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(path, session);
 
             if (resolved.inode().type() != InodeType.DIRECTORY) {
                 System.out.println("ls failed: " + path + " is not a directory");
                 return;
             }
 
+            permissionManager.requireRead(session, resolved.inode());
             List<DirectoryEntry> entries = session.fileSystem().readDirectoryEntries(resolved.inode());
             boolean printedAny = false;
             for (DirectoryEntry entry : entries) {
@@ -1415,13 +1978,18 @@ public class Shell {
         }
     }
 
-    private String formatDirectoryEntry(DirectoryEntry entry) {
+    private String formatDirectoryEntry(DirectoryEntry entry) throws IOException {
         return switch (entry.type()) {
             case DIRECTORY -> entry.name() + "/";
             case FILE -> entry.name();
-            case SYMLINK -> entry.name() + "@";
+            case SYMLINK -> entry.name() + "@ -> " + symlinkTarget(entry.inodeId());
             case UNUSED -> entry.name();
         };
+    }
+
+    private String symlinkTarget(int inodeId) throws IOException {
+        Inode symlinkInode = session.fileSystem().readInode(inodeId);
+        return new String(session.fileSystem().readFileBytes(symlinkInode), StandardCharsets.US_ASCII);
     }
 
     private void cd(ParsedCommand parsedCommand) {
@@ -1438,14 +2006,16 @@ public class Shell {
         String path = operands[0];
 
         try {
-            PathResolver resolver = new PathResolver(session.fileSystem());
-            ResolvedPath resolved = resolver.resolve(path, session.currentDirectoryInodeId());
+            PermissionAwarePathResolver resolver = new PermissionAwarePathResolver(session.fileSystem());
+            PermissionManager permissionManager = new PermissionManager(session.fileSystem());
+            ResolvedPath resolved = resolver.resolve(path, session);
 
             if (resolved.inode().type() != InodeType.DIRECTORY) {
                 System.out.println("cd failed: not a directory");
                 return;
             }
 
+            permissionManager.requireExecute(session, resolved.inode());
             session.setCurrentDirectoryInodeId(resolved.inodeId());
             session.setCurrentPath(normalizePath(session.currentPath(), path));
         } catch (IOException | IllegalArgumentException ex) {
@@ -1533,6 +2103,14 @@ public class Shell {
                 "\nTotal space: " + bootBlock.diskSizeBytes() / 1024 / 1024 + " MB" +
                 "\nUsed space: " + superBlock.usedBlocks() / 1024 + " MB" +
                 "\nFree space: " + superBlock.freeBlocks() / 1024 + " MB");
+    }
+
+    private boolean isDirectoryEntryNotFound(IllegalArgumentException ex) {
+        return ex.getMessage() != null && ex.getMessage().startsWith("directory entry not found:");
+    }
+
+    private boolean isPermissionDenied(IllegalArgumentException ex) {
+        return "permission denied".equals(ex.getMessage());
     }
 
     private boolean hasCurrentDisk() {

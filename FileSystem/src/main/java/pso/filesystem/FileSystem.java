@@ -222,6 +222,45 @@ public final class FileSystem {
         }
     }
 
+    public synchronized void writeUserRecord(UserRecord userRecord) throws IOException {
+        if (userRecord == null) {
+            throw new IllegalArgumentException("userRecord cannot be null");
+        }
+        if (!userRecord.used()) {
+            throw new IllegalArgumentException("cannot write unused user record with this method");
+        }
+
+        int userId = userRecord.userId();
+        int recordsPerBlock = superBlock.blockSize() / UserRecord.BINARY_SIZE;
+        int blockOffset = userId / recordsPerBlock;
+        int slotInBlock = userId % recordsPerBlock;
+
+        if (blockOffset >= superBlock.userTableBlockCount()) {
+            throw new IllegalArgumentException("user id out of range: " + userId);
+        }
+
+        int blockNumber = superBlock.userTableStartBlock() + blockOffset;
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            byte[] block = disk.readBlock(blockNumber);
+            byte[] recordBytes = userRecord.toBytes();
+            System.arraycopy(recordBytes, 0, block, slotInBlock * UserRecord.BINARY_SIZE, UserRecord.BINARY_SIZE);
+            disk.writeBlock(blockNumber, block);
+        }
+    }
+
+    public int allocateUserId() throws IOException {
+        int recordsPerBlock = superBlock.blockSize() / UserRecord.BINARY_SIZE;
+        int totalSlots = superBlock.userTableBlockCount() * recordsPerBlock;
+        for (int userId = 0; userId < totalSlots; userId++) {
+            try {
+                readUserRecord(userId);
+            } catch (IllegalArgumentException ex) {
+                return userId;
+            }
+        }
+        throw new IllegalStateException("no free user slots available");
+    }
+
     public GroupRecord readGroupRecord(int groupId) throws IOException {
         BinaryFormatValidator.requireNonNegative("groupId", groupId);
 
@@ -250,6 +289,98 @@ public final class FileSystem {
 
             return group;
         }
+    }
+
+    public synchronized void writeGroupRecord(GroupRecord groupRecord) throws IOException {
+        if (groupRecord == null) {
+            throw new IllegalArgumentException("groupRecord cannot be null");
+        }
+        if (!groupRecord.used()) {
+            throw new IllegalArgumentException("cannot write unused group record with this method");
+        }
+
+        int groupId = groupRecord.groupId();
+        int recordsPerBlock = superBlock.blockSize() / GroupRecord.BINARY_SIZE;
+        int blockOffset = groupId / recordsPerBlock;
+        int slotInBlock = groupId % recordsPerBlock;
+
+        if (blockOffset >= superBlock.groupTableBlockCount()) {
+            throw new IllegalArgumentException("group id out of range: " + groupId);
+        }
+
+        int blockNumber = superBlock.groupTableStartBlock() + blockOffset;
+        try (VirtualDisk disk = VirtualDisk.openReadWrite(diskName, superBlock.blockSize())) {
+            byte[] block = disk.readBlock(blockNumber);
+            byte[] recordBytes = groupRecord.toBytes();
+            System.arraycopy(recordBytes, 0, block, slotInBlock * GroupRecord.BINARY_SIZE, GroupRecord.BINARY_SIZE);
+            disk.writeBlock(blockNumber, block);
+        }
+    }
+
+    public int allocateGroupId() throws IOException {
+        int recordsPerBlock = superBlock.blockSize() / GroupRecord.BINARY_SIZE;
+        int totalSlots = superBlock.groupTableBlockCount() * recordsPerBlock;
+        for (int groupId = 0; groupId < totalSlots; groupId++) {
+            try {
+                readGroupRecord(groupId);
+            } catch (IllegalArgumentException ex) {
+                return groupId;
+            }
+        }
+        throw new IllegalStateException("no free group slots available");
+    }
+
+    public boolean isUserInGroup(int userId, int groupId) throws IOException {
+        BinaryFormatValidator.requireNonNegative("userId", userId);
+        GroupRecord group = readGroupRecord(groupId);
+        for (int memberUserId : group.memberUserIds()) {
+            if (memberUserId == userId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public UserRecord findUserByUsername(String username) throws IOException {
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("username cannot be blank");
+        }
+
+        int recordsPerBlock = superBlock.blockSize() / UserRecord.BINARY_SIZE;
+        int totalSlots = superBlock.userTableBlockCount() * recordsPerBlock;
+        for (int userId = 0; userId < totalSlots; userId++) {
+            try {
+                UserRecord user = readUserRecord(userId);
+                if (user.username().equals(username)) {
+                    return user;
+                }
+            } catch (IllegalArgumentException ex) {
+                // Empty user table slots are expected while scanning.
+            }
+        }
+
+        throw new IllegalArgumentException("user not found: " + username);
+    }
+
+    public GroupRecord findGroupByName(String groupName) throws IOException {
+        if (groupName == null || groupName.isBlank()) {
+            throw new IllegalArgumentException("group name cannot be blank");
+        }
+
+        int recordsPerBlock = superBlock.blockSize() / GroupRecord.BINARY_SIZE;
+        int totalSlots = superBlock.groupTableBlockCount() * recordsPerBlock;
+        for (int groupId = 0; groupId < totalSlots; groupId++) {
+            try {
+                GroupRecord group = readGroupRecord(groupId);
+                if (group.groupName().equals(groupName)) {
+                    return group;
+                }
+            } catch (IllegalArgumentException ex) {
+                // Empty group table slots are expected while scanning.
+            }
+        }
+
+        throw new IllegalArgumentException("group not found: " + groupName);
     }
 
     public Inode readInode(int inodeId) throws IOException {
@@ -294,8 +425,8 @@ public final class FileSystem {
         if (fileInode == null) {
             throw new IllegalArgumentException("fileInode cannot be null");
         }
-        if (fileInode.type() != InodeType.FILE) {
-            throw new IllegalArgumentException("inode is not a file: " + fileInode.inodeId());
+        if (fileInode.type() != InodeType.FILE && fileInode.type() != InodeType.SYMLINK) {
+            throw new IllegalArgumentException("inode is not a file or symlink: " + fileInode.inodeId());
         }
         if (fileInode.sizeBytes() == 0) {
             return new byte[0];
@@ -334,8 +465,8 @@ public final class FileSystem {
         if (bytes == null) {
             throw new IllegalArgumentException("bytes cannot be null");
         }
-        if (fileInode.type() != InodeType.FILE) {
-            throw new IllegalArgumentException("inode is not a file: " + fileInode.inodeId());
+        if (fileInode.type() != InodeType.FILE && fileInode.type() != InodeType.SYMLINK) {
+            throw new IllegalArgumentException("inode is not a file or symlink: " + fileInode.inodeId());
         }
 
         int blockSize = superBlock.blockSize();
