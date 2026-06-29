@@ -21,6 +21,8 @@ import pso.filesystem.GroupRecord;
 import pso.filesystem.IndexBlock;
 import pso.filesystem.Inode;
 import pso.filesystem.InodeType;
+import pso.filesystem.OpenFileRecord;
+import pso.filesystem.OpenFileTable;
 import pso.filesystem.PermissionAwarePathResolver;
 import pso.filesystem.PermissionManager;
 import pso.filesystem.ResolvedPath;
@@ -190,6 +192,7 @@ public class Shell {
                 chmod(parsedCommand);
                 break;
             case "viewFilesOpen":
+                viewFilesOpen(parsedCommand);
                 break;
             case "viewFCB":
                 viewFCB(parsedCommand);
@@ -214,6 +217,43 @@ public class Shell {
         return true;
     }
     
+    private void viewFilesOpen(ParsedCommand parsedCommand) {
+        if (parsedCommand.operands().length != 0) {
+            System.out.println("usage: viewFilesOpen");
+            return;
+        }
+        if (!hasCurrentDisk()) {
+            return;
+        }
+
+        try {
+            List<OpenFileRecord> records = OpenFileTable.list(session.fileSystem());
+            if (records.isEmpty()) {
+                System.out.println("(no open files)");
+                return;
+            }
+
+            System.out.printf("%-8s %-10s %-10s %-6s %-24s %-24s%n",
+                    "HANDLE", "USER", "MODE", "INODE", "PATH", "TARGET");
+            for (OpenFileRecord record : records) {
+                String handle = Long.toHexString(record.handleId());
+                if (handle.length() > 8) {
+                    handle = handle.substring(0, 8);
+                }
+                String target = record.requestedPath().equals(record.targetPath()) ? "-" : record.targetPath();
+                System.out.printf("%-8s %-10s %-10s %-6d %-24s %-24s%n",
+                        handle,
+                        record.username(),
+                        record.mode(),
+                        record.inodeId(),
+                        record.requestedPath(),
+                        target);
+            }
+        } catch (IOException | IllegalArgumentException ex) {
+            System.out.println("viewFilesOpen failed: " + ex.getMessage());
+        }
+    }
+
     private void groupadd(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -1029,7 +1069,8 @@ public class Shell {
         int inodeTableStartBlock = BITMAP_START_BLOCK + bitmapBlockCount;
         int userTableStartBlock = inodeTableStartBlock + INODE_TABLE_BLOCK_COUNT;
         int groupTableStartBlock = userTableStartBlock + USER_TABLE_BLOCK_COUNT;
-        int dataRegionStartBlock = groupTableStartBlock + GROUP_TABLE_BLOCK_COUNT;
+        int openFileTableStartBlock = groupTableStartBlock + GROUP_TABLE_BLOCK_COUNT;
+        int dataRegionStartBlock = openFileTableStartBlock + OpenFileTable.RESERVED_BLOCK_COUNT;
         int rootIndexBlock = dataRegionStartBlock;
         int rootDirectoryDataBlock = rootIndexBlock + 1;
         int rootHomeIndexBlock = rootDirectoryDataBlock + 1;
@@ -1152,6 +1193,12 @@ public class Shell {
             disk.writeBlock(groupTableStartBlock, firstGroupTableBlock);
             for (int block = groupTableStartBlock + 1; block < groupTableStartBlock
                     + GROUP_TABLE_BLOCK_COUNT; block++) {
+                disk.writeBlock(block, new byte[blockSize]);
+            }
+
+            for (int block = openFileTableStartBlock;
+                    block < openFileTableStartBlock + OpenFileTable.RESERVED_BLOCK_COUNT;
+                    block++) {
                 disk.writeBlock(block, new byte[blockSize]);
             }
 
@@ -1471,14 +1518,27 @@ public class Shell {
             }
 
             permissionManager.requireRead(session, resolved.inode());
-            byte[] bytes = session.fileSystem().readFileBytes(resolved.inode());
-            System.out.print(asciiText(bytes));
-            if (bytes.length > 0 && bytes[bytes.length - 1] != '\n') {
-                System.out.println();
-            }
-            System.out.print("press q then ENTER to quit: ");
-            while (!scanner.nextLine().equals("q")) {
+            String requestedPath = normalizePath(session.currentPath(), inputPath);
+            String targetPath = targetPathForOpen(requestedPath);
+            try (OpenFileTable.Handle ignored = OpenFileTable.open(
+                    session.fileSystem(),
+                    session.sessionId(),
+                    session.currentUserId(),
+                    currentUserName(),
+                    OpenFileRecord.Mode.READ,
+                    resolved.inodeId(),
+                    requestedPath,
+                    targetPath
+            )) {
+                byte[] bytes = session.fileSystem().readFileBytes(resolved.inode());
+                System.out.print(asciiText(bytes));
+                if (bytes.length > 0 && bytes[bytes.length - 1] != '\n') {
+                    System.out.println();
+                }
                 System.out.print("press q then ENTER to quit: ");
+                while (!scanner.nextLine().equals("q")) {
+                    System.out.print("press q then ENTER to quit: ");
+                }
             }
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("less failed: " + ex.getMessage());
@@ -1537,6 +1597,70 @@ public class Shell {
         return text.toString();
     }
 
+    private String targetPathForOpen(String absoluteRequestedPath) throws IOException {
+        return targetPathForOpen(absoluteRequestedPath, 0);
+    }
+
+    private String targetPathForOpen(String absolutePath, int symlinkDepth) throws IOException {
+        if (symlinkDepth > 16) {
+            throw new IllegalArgumentException("too many symbolic links");
+        }
+
+        String normalizedPath = normalizePath("/", absolutePath);
+        if (normalizedPath.equals("/")) {
+            return normalizedPath;
+        }
+
+        FileSystem fileSystem = session.fileSystem();
+        int currentInodeId = fileSystem.superBlock().rootInodeId();
+        String currentPath = "/";
+        String[] components = normalizedPath.split("/");
+
+        for (int i = 0; i < components.length; i++) {
+            String component = components[i];
+            if (component.isEmpty() || component.equals(".")) {
+                continue;
+            }
+
+            DirectoryEntry entry = fileSystem.findDirectoryEntry(currentInodeId, component);
+            if (entry.type() == InodeType.SYMLINK) {
+                String rawTarget = symlinkTarget(entry.inodeId()).trim();
+                if (rawTarget.isBlank()) {
+                    return normalizedPath;
+                }
+
+                String symlinkTargetPath = rawTarget.startsWith("/")
+                        ? normalizePath("/", rawTarget)
+                        : normalizePath(currentPath, rawTarget);
+                String remaining = remainingPath(components, i + 1);
+                String combined = remaining.isBlank()
+                        ? symlinkTargetPath
+                        : normalizePath(symlinkTargetPath, remaining);
+                return targetPathForOpen(combined, symlinkDepth + 1);
+            }
+
+            currentInodeId = entry.inodeId();
+            currentPath = currentPath.equals("/") ? "/" + component : currentPath + "/" + component;
+        }
+
+        return normalizedPath;
+    }
+
+    private String remainingPath(String[] components, int startIndex) {
+        StringBuilder remaining = new StringBuilder();
+        for (int i = startIndex; i < components.length; i++) {
+            String component = components[i];
+            if (component.isEmpty() || component.equals(".")) {
+                continue;
+            }
+            if (!remaining.isEmpty()) {
+                remaining.append('/');
+            }
+            remaining.append(component);
+        }
+        return remaining.toString();
+    }
+
     private void note(ParsedCommand parsedCommand) {
         String[] operands = parsedCommand.operands();
         if (operands.length != 1) {
@@ -1572,10 +1696,22 @@ public class Shell {
                 fileInode = createEmptyFileForNote(absolutePath, resolver, permissionManager);
             }
 
-            byte[] initialContent = fileSystem.readFileBytes(fileInode);
-            NoteEditor.EditResult result = new NoteEditor(absolutePath).edit(initialContent);
-            if (result.save()) {
-                fileSystem.writeFileBytes(fileInode, result.content());
+            String targetPath = targetPathForOpen(absolutePath);
+            try (OpenFileTable.Handle ignored = OpenFileTable.open(
+                    fileSystem,
+                    session.sessionId(),
+                    session.currentUserId(),
+                    currentUserName(),
+                    OpenFileRecord.Mode.READ_WRITE,
+                    fileInode.inodeId(),
+                    absolutePath,
+                    targetPath
+            )) {
+                byte[] initialContent = fileSystem.readFileBytes(fileInode);
+                NoteEditor.EditResult result = new NoteEditor(absolutePath).edit(initialContent);
+                if (result.save()) {
+                    fileSystem.writeFileBytes(fileInode, result.content());
+                }
             }
         } catch (IOException | IllegalArgumentException ex) {
             System.out.println("note failed: " + ex.getMessage());

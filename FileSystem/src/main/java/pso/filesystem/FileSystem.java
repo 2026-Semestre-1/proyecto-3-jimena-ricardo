@@ -37,6 +37,14 @@ public final class FileSystem {
         return superBlock;
     }
 
+    public int openFileTableStartBlock() {
+        return superBlock.groupTableStartBlock() + superBlock.groupTableBlockCount();
+    }
+
+    public int openFileTableBlockCount() {
+        return superBlock.dataRegionStartBlock() - openFileTableStartBlock();
+    }
+
     public FreeSpaceBitmap readFreeSpaceBitmap() throws IOException {
         int blockSize = superBlock.blockSize();
         byte[] bitmapBytes = new byte[blockSize * superBlock.bitmapBlockCount()];
